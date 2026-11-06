@@ -242,16 +242,6 @@ let rec peel_lams (n : int) (e : term) : var list * term =
     | Tm_abs { xbinder; xbody; _ } -> let ps, b = peel_lams (n - 1) xbody in (xbinder :: ps, b)
     | _ -> ([], e)
 
-let is_true_term (t : term) : bool = match t with Tm_const (C_bool true) -> true | _ -> false
-
-(* does the declared type carry any user refinement (a non-trivial predicate)? *)
-let rec has_refinement (t : typ) : bool =
-  match t with
-  | T_refine { rbase; rphi; _ } -> (not (is_true_term rphi)) || base_has_ref rbase
-  | T_arrow { adom; acod; _ } -> has_refinement adom || has_refinement acod
-and base_has_ref (b : base_typ) : bool =
-  match b with B_app (_, args) -> List.exists has_refinement args | _ -> false
-
 let ctor_fields_table (m : modul) : (string, base_typ list) Hashtbl.t =
   let tbl : (string, base_typ list) Hashtbl.t = Hashtbl.create 16 in
   List.iter (fun ind -> List.iter (fun c -> Hashtbl.replace tbl c.cname c.inputs) (cinfos ind))
@@ -371,6 +361,21 @@ let definitional_equations (m : modul) : defeq list =
     (inductives m);
   let ctors_of tname =
     match Hashtbl.find_opt ctors tname with Some cs -> cs | None -> [] in
+  (* A definition's body is visible — its equations are emitted — whether or not its
+     `val` is refined, as in F*, Dafny and Verus: the refinement is checked against the
+     body, and callers may unfold the body where the refinement says too little.
+     `irreducible` (on the `val` or the `let`) is the opt-out that makes it opaque, so
+     only its spec speaks for it. *)
+  let irreducible =
+    List.concat_map
+      (fun se ->
+        if not (List.mem Q_irreducible se.sig_quals) then []
+        else match se.sig_el with
+          | Sig_val (l, _) -> [ l.bname ]
+          | Sig_let lbs -> List.map (fun lb -> lb.lb_name.vname) lbs.lbs
+          | _ -> [])
+      m.mod_decls
+  in
   List.concat_map
     (fun se ->
       match se.sig_el with
@@ -385,7 +390,7 @@ let definitional_equations (m : modul) : defeq list =
             in
             match declared with
             | T_arrow _
-              when fun_result declared <> B_unit && not (has_refinement declared) ->
+              when fun_result declared <> B_unit && not (List.mem name irreducible) ->
               let dom_bases = fun_doms declared in
               let vars, inner = peel_lams (List.length dom_bases) lb.lb_def in
               (try gen_equations name (List.combine vars dom_bases) field_sorts ctors_of inner

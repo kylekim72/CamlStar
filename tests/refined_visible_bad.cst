@@ -1,0 +1,38 @@
+module RefinedVisibleBad
+
+(* The red side of tests/refined_visible.cst. Expected: 4 verified, 3 failed, 7 VCs.
+   Red:
+   - a goal the body refutes stays red although the body is now visible;
+   - an `irreducible` definition is opaque: a goal that needs its body stays red,
+     whether the qualifier is on the `val` or on the `let`.
+   Verified: the three definitions' own refinement checks, and the `irreducible`
+   definition's spec at a binding. *)
+
+type nat =
+  | Z : nat
+  | S : nat -> nat
+
+val bump : x:nat -> r:nat{~(r = Z)}
+let bump (x:nat) = S x
+
+(* false: the body says S Z *)
+val bump_wrong : u:nat -> Lemma(ensures bump Z = S (S Z))
+let bump_wrong u = ()
+
+(* opaque by the qualifier on the val *)
+irreducible val hide : x:nat -> r:nat{~(r = Z)}
+let hide (x:nat) = S x
+
+val hide_body : u:nat -> Lemma(ensures hide Z = S Z)
+let hide_body u = ()
+
+(* opaque by the qualifier on the let *)
+val hide2 : x:nat -> r:nat{~(r = Z)}
+irreducible let hide2 (x:nat) = S x
+
+val hide2_body : u:nat -> Lemma(ensures hide2 Z = S Z)
+let hide2_body u = ()
+
+(* the spec of an irreducible definition is still there at a binding *)
+val hide_spec : x:nat -> Lemma(ensures ~(hide x = Z))
+let hide_spec x = let r = hide x in ()

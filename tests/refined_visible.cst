@@ -1,0 +1,51 @@
+module RefinedVisible
+
+(* Regression test for a definition with a refined `val` keeping its body. Its
+   equations are emitted as for an unrefined definition, so a caller can unfold it
+   where the refinement says too little, as F*, Dafny and Verus allow. Before, a
+   refined `val` made the definition opaque: only its spec spoke for it, and every
+   goal below that needs the body saturated. `irreducible` is the opt-out; the goals
+   that must stay red, including an `irreducible` definition's body, are in
+   tests/refined_visible_bad.cst. *)
+
+type nat =
+  | Z : nat
+  | S : nat -> nat
+
+type nlist =
+  | NNil : nlist
+  | NCons : nat -> nlist -> nlist
+
+(* the spec says only "not zero"; the goal needs the value *)
+val bump : x:nat -> r:nat{~(r = Z)}
+let bump (x:nat) = S x
+
+val bump_z : u:nat -> Lemma(ensures bump Z = S Z)
+let bump_z u = ()
+
+(* a recursive refined definition: the spec says the length is preserved in a weak
+   form, the goals need its equations at concrete shapes *)
+let rec len (l:nlist) = match l with
+  | NNil -> Z
+  | NCons x r -> S (len r)
+
+val dup : l:nlist -> r:nlist{len r = len r}
+let rec dup (l:nlist) = match l with
+  | NNil -> NNil
+  | NCons x r -> NCons x (NCons x (dup r))
+
+val dup_nil : u:nat -> Lemma(ensures dup NNil = NNil)
+let dup_nil u = ()
+
+val dup_one : x:nat -> Lemma(ensures dup (NCons x NNil) = NCons x (NCons x NNil))
+let dup_one x = ()
+
+(* a refined definition used inside another definition's body, unfolded through *)
+let bump_twice (x:nat) = bump (bump x)
+
+val bump_twice_z : u:nat -> Lemma(ensures bump_twice Z = S (S Z))
+let bump_twice_z u = ()
+
+(* the spec still holds at a binding, as before *)
+val bump_spec : x:nat -> Lemma(ensures ~(bump x = Z))
+let bump_spec x = let r = bump x in ()
