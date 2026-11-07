@@ -1,0 +1,162 @@
+module LeaderElection
+
+(* One-shot leader election (a one-round Paxos), transcribed from OneShotLeader.fst with
+   the invariants `is_safe` and `inv2`–`inv7` as quantified definitions — the acceptance
+   shape for quantified definitions (todo item 50(a), step 9). Departures forced by this
+   branch: no records (the state is one constructor with projections), no maps (each map
+   is a list of pairs with a lookup and a default), the node `self` is a parameter `me`
+   of every action, F*'s `L.find` becomes an action parameter guarded by `mem`, and the
+   initial state is written out where it is used.
+
+   Expected on this branch: the file parses, every safety lemma yields one VC per
+   invariant (35 VCs), and `init_safe` verifies; the per-action lemmas saturate with
+   empty bodies, since each needs at least the case split on the state. Measured
+   2026-11-03 with `match s with | St ld vd vt ms -> ()` as each action proof: 33 of 35
+   verify. The two left: `declare_leader_safe` preserving `inv7` needs the quorum
+   axiom's existential (todo item 47), and `register_leader_safe` preserving `is_safe`
+   needs a case split on the looked-up value `sel_l ld n1`, whose `n1` is a variable the
+   peel introduced and the proof body cannot name (countermodel: an `onode` that is
+   neither `NoneN` nor any `SomeN`). Not run by strip_and_reprove.sh. *)
+
+type node =
+  | N1 : node
+  | N2 : node
+  | N3 : node
+
+type onode =
+  | NoneN : onode
+  | SomeN : node -> onode
+
+type nlist =
+  | NNil : nlist
+  | NCons : node -> nlist -> nlist
+
+let rec nmem (x:node) (l:nlist) = match l with
+  | NNil -> false
+  | NCons y r -> if x = y then true else nmem x r
+
+type msg =
+  | Vote : node -> node -> msg      (* from, to *)
+  | Leader : node -> msg
+
+type mlist =
+  | MNil : mlist
+  | MCons : msg -> mlist -> mlist
+
+let rec mem (m:msg) (l:mlist) = match l with
+  | MNil -> false
+  | MCons x r -> if m = x then true else mem m r
+
+(* ---- maps as lists of pairs, lookup with a default ---- *)
+type lmap =                           (* node -> onode, default NoneN *)
+  | LNil : lmap
+  | LCons : node -> onode -> lmap -> lmap
+
+let rec sel_l (m:lmap) (k:node) = match m with
+  | LNil -> NoneN
+  | LCons k' v r -> if k = k' then v else sel_l r k
+
+type vmap =                           (* node -> bool, default false *)
+  | VNil : vmap
+  | VCons : node -> bool -> vmap -> vmap
+
+let rec sel_v (m:vmap) (k:node) = match m with
+  | VNil -> false
+  | VCons k' v r -> if k = k' then v else sel_v r k
+
+type tmap =                           (* node -> nlist, default NNil *)
+  | TNil : tmap
+  | TCons : node -> nlist -> tmap -> tmap
+
+let rec sel_t (m:tmap) (k:node) = match m with
+  | TNil -> NNil
+  | TCons k' v r -> if k = k' then v else sel_t r k
+
+(* ---- the state: leader, voted, votes, msgs ---- *)
+type state =
+  | St : lmap -> vmap -> tmap -> mlist -> state
+
+let leader_of (s:state) = match s with | St ld vd vt ms -> ld
+let voted_of (s:state) = match s with | St ld vd vt ms -> vd
+let votes_of (s:state) = match s with | St ld vd vt ms -> vt
+let msgs_of (s:state) = match s with | St ld vd vt ms -> ms
+
+(* ---- quorums ---- *)
+assume val is_quorum : nlist -> bool
+
+assume quorum_intersection : forall (q1:nlist) (q2:nlist).
+  is_quorum q1 /\ is_quorum q2 ==> (exists (n:node). nmem n q1 /\ nmem n q2)
+
+assume quorum_monotonic : forall (q1:nlist) (q2:nlist).
+  is_quorum q1 /\ (forall (x:node). nmem x q1 ==> nmem x q2) ==> is_quorum q2
+
+(* ---- invariants, as quantified definitions ---- *)
+let is_safe (s:state) =
+  forall (n1:node) (n2:node).
+    sel_l (leader_of s) n1 = NoneN \/ sel_l (leader_of s) n2 = NoneN
+    \/ sel_l (leader_of s) n1 = sel_l (leader_of s) n2
+
+let inv2 (s:state) =
+  forall (n:node). mem (Leader n) (msgs_of s) ==> is_quorum (sel_t (votes_of s) n)
+
+let inv3 (s:state) =
+  forall (n1:node) (n2:node). sel_l (leader_of s) n1 = SomeN n2 ==> mem (Leader n2) (msgs_of s)
+
+let inv4 (s:state) =
+  forall (n1:node) (n2:node). nmem n2 (sel_t (votes_of s) n1) ==> mem (Vote n2 n1) (msgs_of s)
+
+let inv5 (s:state) =
+  forall (n1:node) (n2:node) (n3:node).
+    mem (Vote n1 n2) (msgs_of s) /\ mem (Vote n1 n3) (msgs_of s) ==> n2 = n3
+
+let inv6 (s:state) =
+  forall (n1:node) (n2:node). mem (Vote n1 n2) (msgs_of s) ==> sel_v (voted_of s) n1 = true
+
+let inv7 (s:state) =
+  forall (n1:node) (n2:node).
+    mem (Leader n1) (msgs_of s) /\ mem (Leader n2) (msgs_of s) ==> n1 = n2
+
+let inv (s:state) = is_safe s /\ inv2 s /\ inv3 s /\ inv4 s /\ inv5 s /\ inv6 s /\ inv7 s
+
+(* ---- actions, `me` is the acting node ---- *)
+let cast_vote (me:node) (n:node) (s:state) = match s with
+  | St ld vd vt ms ->
+    if sel_v vd me then s
+    else St ld (VCons me true vd) vt (MCons (Vote me n) ms)
+
+(* a vote for me from frm that is on the network and not yet counted *)
+let recv_vote (me:node) (frm:node) (s:state) = match s with
+  | St ld vd vt ms ->
+    if mem (Vote frm me) ms then
+      (if nmem frm (sel_t vt me) then s
+       else St ld vd (TCons me (NCons frm (sel_t vt me)) vt) ms)
+    else s
+
+let declare_leader (me:node) (s:state) = match s with
+  | St ld vd vt ms ->
+    if is_quorum (sel_t vt me) then St ld vd vt (MCons (Leader me) ms) else s
+
+(* a Leader message for n that is on the network *)
+let register_leader (me:node) (n:node) (s:state) = match s with
+  | St ld vd vt ms ->
+    if mem (Leader n) ms then St (LCons me (SomeN n) ld) vd vt ms else s
+
+(* ---- safety ---- *)
+val init_safe : u:node -> Lemma(ensures inv (St LNil VNil TNil MNil))
+let init_safe u = ()
+
+val cast_vote_safe : me:node -> n:node -> s:state ->
+  Lemma(ensures inv s ==> inv (cast_vote me n s))
+let cast_vote_safe me n s = ()
+
+val recv_vote_safe : me:node -> frm:node -> s:state ->
+  Lemma(ensures inv s ==> inv (recv_vote me frm s))
+let recv_vote_safe me frm s = ()
+
+val declare_leader_safe : me:node -> s:state ->
+  Lemma(ensures inv s ==> inv (declare_leader me s))
+let declare_leader_safe me s = ()
+
+val register_leader_safe : me:node -> n:node -> s:state ->
+  Lemma(ensures inv s ==> inv (register_leader me n s))
+let register_leader_safe me n s = ()
