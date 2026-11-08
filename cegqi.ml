@@ -27,6 +27,16 @@ let is_ctor_term (ctors : (string, unit) Hashtbl.t) (t : term) : bool =
   | Tm_fvar l -> Hashtbl.mem ctors l.bname
   | _ -> false
 
+(* ===== the sort of a ground term ===== *)
+
+let sort_of (vc : Vc.t) (ret_sort : (string, base_typ) Hashtbl.t) (t : term) :
+    base_typ option =
+  match head_spine t [] with
+  | Tm_var v, [] ->
+    List.find_map (fun (s, b) -> if s.vid = v.vid then Some b else None) vc.Vc.scope
+  | Tm_fvar l, _ -> Hashtbl.find_opt ret_sort l.bname
+  | _ -> None
+
 (* ===== shapes ===== *)
 
 (* Hypotheses arrive as single propositions, but a branch can contribute a conjunction

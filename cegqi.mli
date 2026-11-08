@@ -18,6 +18,14 @@
    what let an equation's argument patterns match. *)
 val shapes : Ast.modul -> Vc.t -> (Ast.term * Ast.term) list
 
+(* The sort of a term the query can name, for instantiating a quantifier's binders at
+   the ledger's terms: a scope variable's from [vc.scope]; an application's, or a
+   constructor's (nullary included), from [ret_sort], the result sorts of functions and
+   constructors ([Axioms.ret_sort_table]). [None] for anything else: a variable not in
+   scope (bound by a quantifier), a literal, a lambda. Terms are first-order, so a
+   [Tm_fvar] head is a saturated application or a nullary constructor. *)
+val sort_of : Vc.t -> (string, Ast.base_typ) Hashtbl.t -> Ast.term -> Ast.base_typ option
+
 (* Add a shape for [key] unless one is already recorded for it. *)
 val add_shape : (Ast.term * Ast.term) list -> Ast.term -> Ast.term -> (Ast.term * Ast.term) list
 

@@ -178,6 +178,23 @@ let rec tip xs = match xs with
   | Cons h t -> tip t
 |}
 
+(* item 46, F2: sorts of the terms a quantifier's binders can be instantiated at *)
+let sorts = {|
+module Sorts
+type nat = | Z : nat | S : nat -> nat
+type nlist = | NNil : nlist | NCons : nat -> nlist -> nlist
+type state = | St : nlist -> nat -> state
+let items (s:state) = match s with | St l c -> l
+let rec count (x:nat) (l:nlist) : nat = match l with
+  | NNil -> Z
+  | NCons y r -> if x = y then S (count x r) else count x r
+let rec mem (x:nat) (l:nlist) = match l with
+  | NNil -> false
+  | NCons y r -> if x = y then true else mem x r
+val t : s:state -> x:nat -> Lemma(ensures count x (items s) = count x (items s))
+let t s x = ()
+|}
+
 let () =
   print_endline "cegqi_test";
 
@@ -288,6 +305,31 @@ let () =
     (under [ h1; goal ] = []) (String.concat " | " (under [ h1; goal ]));
   check "under-quantifier: a formula with no quantifier gives nothing"
     (under [ goal ] = []) (String.concat " | " (under [ goal ]));
+
+  (* --- sort_of (item 46, F2): the sort of a term the ledger can name --- *)
+  let m, vcs = vcs_of sorts in
+  let vc = List.hd vcs in
+  let rs = Axioms.ret_sort_table m in
+  let scope_var n = Ast.Tm_var (fst (List.find (fun (v, _) -> v.Ast.vname = n) vc.Vc.scope)) in
+  let s = scope_var "s" and x = scope_var "x" in
+  let sort t =
+    match Cegqi.sort_of vc rs t with Some b -> Smtlib.sort_of_base b | None -> "None" in
+  let expect name t want =
+    let got = sort t in
+    check ("sort_of " ^ name ^ " is " ^ want) (got = want) ("got " ^ got)
+  in
+  expect "a scope variable (x)" x "UI_nat";
+  expect "a scope variable of a datatype (s)" s "UI_state";
+  expect "an application (items s)" (app "items" [ s ]) "UI_nlist";
+  expect "a nested application (count x (items s))"
+    (app "count" [ x; app "items" [ s ] ]) "UI_nat";
+  expect "a bool predicate's application (mem x (items s))"
+    (app "mem" [ x; app "items" [ s ] ]) "Bool";
+  expect "a nullary constructor (Z)" (c "Z") "UI_nat";
+  expect "a constructor application (NCons Z NNil)" (app "NCons" [ c "Z"; c "NNil" ]) "UI_nlist";
+  expect "a variable not in scope (bound by a quantifier)" (Ast.Tm_var (Ast.fresh_var "y")) "None";
+  expect "a literal" (Ast.Tm_const (Ast.C_bool true)) "None";
+  expect "an unknown head" (app "nosuch" [ x ]) "None";
 
   if !failures = 0 then print_endline "all cegqi tests passed"
   else (Printf.printf "%d failure(s)\n" !failures; exit 1)
