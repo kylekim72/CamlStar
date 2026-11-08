@@ -269,5 +269,25 @@ let () =
     (Cegqi.eval_in_cex cex (Ast.Tm_fvar (Ast.lid_of_str "Z")) = Some (Cex.Scalar "Z"))
     "expected Z";
 
+  (* --- ground_apps_under_quantifiers (item 46, gap A) --- *)
+  let s = Ast.Tm_var (Ast.fresh_var "s") in
+  let c n = Ast.Tm_fvar (Ast.lid_of_str n) in
+  let y = Ast.fresh_var "y" in
+  let yv = Ast.Tm_var y in
+  let forall_y body =
+    Ast.Tm_quant { Ast.qk = Ast.Forall; qv = y; qty = None; qbody = body } in
+  let eq a b = app "eq" [ a; b ] in
+  let under ts = List.map Ast.string_of_term (Smtlib.ground_apps_under_quantifiers ts) in
+  let h1 = forall_y (eq (app "count" [ yv; app "items" [ s ] ]) (c "Z")) in
+  check "under-quantifier: the ground items s is listed"
+    (under [ h1 ] = [ "items s" ]) (String.concat " | " (under [ h1 ]));
+  check "under-quantifier: an application over the bound y is not"
+    (not (List.mem "count y (items s)" (under [ h1 ]))) (String.concat " | " (under [ h1 ]));
+  let goal = eq (app "items" [ s ]) (c "NNil") in
+  check "under-quantifier: a term that also occurs outside a quantifier is not listed"
+    (under [ h1; goal ] = []) (String.concat " | " (under [ h1; goal ]));
+  check "under-quantifier: a formula with no quantifier gives nothing"
+    (under [ goal ] = []) (String.concat " | " (under [ goal ]));
+
   if !failures = 0 then print_endline "all cegqi tests passed"
   else (Printf.printf "%d failure(s)\n" !failures; exit 1)

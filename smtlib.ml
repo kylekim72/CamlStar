@@ -212,6 +212,25 @@ let collect_apps (ts : term list) : term list =
   in
   List.iter (go []) ts; List.rev !acc
 
+let ground_apps_under_quantifiers (ts : term list) : term list =
+  (* the outermost quantified subformulas, and the term with each replaced by true *)
+  let rec split t =
+    match t with
+    | Tm_quant _ -> ([ t ], mk_true)
+    | Tm_app (f, a) ->
+      let qf, f' = split f in
+      let qa, a' = split a in
+      (qf @ qa, Tm_app (f', a'))
+    | Tm_ascribed (e, ty) -> let q, e' = split e in (q, Tm_ascribed (e', ty))
+    | _ -> ([], t)
+  in
+  let parts = List.map split ts in
+  let outside : (string, unit) Hashtbl.t = Hashtbl.create 16 in
+  List.iter (fun a -> Hashtbl.replace outside (Ast.string_of_term a) ())
+    (collect_apps (List.map snd parts));
+  List.filter (fun a -> not (Hashtbl.mem outside (Ast.string_of_term a)))
+    (collect_apps (List.concat_map fst parts))
+
 (* Every applied term the query already materialises as a witness — the goal, the
    hypotheses (incl. constructor discriminators), and the instantiate! hints — as one
    deduplicated list. Under the hybrid instantiation method the counterexample locates a

@@ -170,9 +170,17 @@ let build_query (m : modul) (ret_sort : string -> base_typ) (vc : Vc.t) : string
   let naming = Smtlib.make_naming (List.map fst vc.Vc.scope) in  (* readable model names *)
   let anf_f = Anf.normalize (is_pred ret_sort) (vc_formula vc) in
   let f = Relabs.transform ret_sort (Nnf.normalize anf_f) in     (* the negated VC *)
-  (* materialise both the VC's ground applied subterms and each instantiate! hint *)
+  (* materialise the VC's ground applied subterms, each instantiate! hint, and the ground
+     applications that occur only under a quantifier: ground_lets stops at quantifiers,
+     but these are in the ledger, so CEGQI counts them present and never proposes them *)
   let hint_binds = List.concat_map (Anf.hoist (is_pred ret_sort)) vc.Vc.instantiations in
-  let mat = materialize_binds ret_sort (ground_lets anf_f @ hint_binds) in
+  let in_scope (v : var) = List.exists (fun (s, _) -> s.vid = v.vid) vc.Vc.scope in
+  let under_quant =
+    List.filter (fun t -> List.for_all in_scope (Subst.free_vars_term t))
+      (Smtlib.ground_apps_under_quantifiers (vc.Vc.goal :: vc.Vc.hyps))
+  in
+  let quant_binds = List.concat_map (Anf.hoist (is_pred ret_sort)) under_quant in
+  let mat = materialize_binds ret_sort (ground_lets anf_f @ hint_binds @ quant_binds) in
   let sort_decls, const_decls = scope_decls naming vc.Vc.scope in
   let final_axioms = global_final_axioms m in
   let raw_axioms = List.map (full_transform ret_sort) (global_raw_axioms m @ vc.Vc.axioms) in

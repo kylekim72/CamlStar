@@ -51,6 +51,12 @@ val term_to_sexpr : naming -> Ast.term -> string
    candidate would actually add anything. *)
 val collect_apps : Ast.term list -> Ast.term list
 
+(* The applications of [collect_apps] that occur only under a quantifier and mention none
+   of its bound variables ([items s] in [forall x. count x (items s) = Z]). They are in
+   the ledger, but materialisation of the formula stops at quantifiers, so the query must
+   materialise them separately, as it does an instantiate! hint. *)
+val ground_apps_under_quantifiers : Ast.term list -> Ast.term list
+
 (* The "instantiated terms" list: every user-function/constructor application a VC
    already materialises as a witness (goal + hypotheses + instantiate! hints), inner
    applications first, deduplicated. Printed after a counterexample and as a comment atop
