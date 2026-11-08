@@ -1,0 +1,139 @@
+module QuantInst
+
+(* Item 46, the frontier under quantifiers. A quantified hypothesis or axiom is universal
+   in the query, so the solver may instantiate it anywhere; but under relational
+   abstraction an instance says nothing unless the applications in its guards have values,
+   and two kinds of application under a quantifier never get one today:
+
+   A. a *ground* application inside a quantified hypothesis (`items s` in
+      `forall x. count x (items s) = Z`): it has no bound variable, so the ledger lists
+      it and CEGQI counts it present, but `ground_lets` stops at quantifiers, so it is
+      never materialised either;
+   B. an application with a *bound* variable in an argument position (`k x` in
+      `forall x. f x = g (k x)`): CEGQI never proposes it, at any term.
+
+   (The outermost application of an equation's right side is asserted, not guarded, so it
+   needs no value: `g (k x)` above needs only `k x`.) Expected today: the controls verify,
+   every A and B case fails (saturated). Expected after item 46: all verify. Hand check of
+   the target (2026-11-07, on scratch copies): each A case verifies today with
+   `instantiate!(items s)`; a proof cannot name the goal's peeled variable (item 52), so
+   each B case was checked on a twin with that variable as a lemma parameter, which
+   verifies with the `instantiate!` named in its comment and fails without it. The sorts
+   of section B are layered (nat -> key -> item) so that instances terminate; the false
+   goals, including a cyclic one, are tests/quant_inst_bad.cst. *)
+
+type nat =
+  | Z : nat
+  | S : nat -> nat
+
+type nlist =
+  | NNil : nlist
+  | NCons : nat -> nlist -> nlist
+
+type state =
+  | St : nlist -> nat -> state
+
+type key =
+  | K : nat -> key
+
+type item =
+  | I : nat -> item
+
+let items (s:state) = match s with | St l c -> l
+
+let rec count (x:nat) (l:nlist) : nat = match l with
+  | NNil -> Z
+  | NCons y r -> if x = y then S (count x r) else count x r
+
+(* advances the counter, leaves the items alone *)
+let tick (s:state) = match s with | St l c -> St l (S c)
+
+(* every count is zero: a quantified invariant over a data-returning function *)
+let allc (s:state) = forall (x:nat). count x (items s) = Z
+
+(* ---- controls: verify today ---- *)
+
+(* the variable as a lemma parameter: the frame fact is ground *)
+val tick_frame_p : s:state -> x:nat -> Lemma(ensures count x (items (tick s)) = count x (items s))
+let tick_frame_p s x = match s with | St l c -> ()
+
+val tick_allc_p : s:state -> x:nat -> Lemma(ensures allc s ==> count x (items (tick s)) = Z)
+let tick_allc_p s x = let _ = tick_frame_p s x in ()
+
+(* the goal names the instance itself *)
+val allc_at : s:state -> x:nat -> Lemma(ensures allc s ==> count x (items s) = Z)
+let allc_at s x = ()
+
+(* ==== A. a ground application inside a quantified hypothesis: needs items s ==== *)
+
+(* A1: a called lemma's quantified ensures *)
+val tick_frame : s:state -> Lemma(ensures forall (x:nat). count x (items (tick s)) = count x (items s))
+let tick_frame s = match s with | St l c -> ()
+
+val tick_allc : s:state -> Lemma(ensures allc s ==> allc (tick s))
+let tick_allc s = let _ = tick_frame s in ()
+
+(* A2: an assumed axiom *)
+assume val bump : state -> state
+
+assume bump_frame : forall (s:state) (x:nat). count x (items (bump s)) = count x (items s)
+
+val bump_allc : s:state -> Lemma(ensures allc s ==> allc (bump s))
+let bump_allc s = ()
+
+(* A3: two binders *)
+let rec count2 (x:nat) (y:nat) (l:nlist) : nat = match l with
+  | NNil -> Z
+  | NCons z r -> if x = z then S (count2 x y r) else if y = z then S (count2 x y r) else count2 x y r
+
+let allc2 (s:state) = forall (x:nat) (y:nat). count2 x y (items s) = Z
+
+val tick_frame2 : s:state ->
+  Lemma(ensures forall (x:nat) (y:nat). count2 x y (items (tick s)) = count2 x y (items s))
+let tick_frame2 s = match s with | St l c -> ()
+
+val tick_allc2 : s:state -> Lemma(ensures allc2 s ==> allc2 (tick s))
+let tick_allc2 s = let _ = tick_frame2 s in ()
+
+(* ==== B. a bound variable in an argument: an instance at a ledger term ==== *)
+
+assume val key_of : nat -> key
+assume val key_of2 : nat -> nat -> key
+assume val item_of : key -> item
+assume val val_k : key -> nat
+assume val val_i : item -> nat
+
+assume val_k_zero : forall (y:key). val_k y = Z
+assume val_i_zero : forall (y:item). val_i y = Z
+
+(* B1: a called lemma's quantified ensures, at the goal's peeled x: needs key_of x *)
+assume val f1 : nat -> nat
+assume val f1_spec : u:nat -> Lemma(ensures forall (x:nat). f1 x = val_k (key_of x))
+
+val f1_zero : u:nat -> Lemma(ensures forall (x:nat). f1 x = Z)
+let f1_zero u = let _ = f1_spec u in ()
+
+(* B2: an assumed axiom, at the goal's peeled x: needs key_of x *)
+assume val f2 : nat -> nat
+assume f2_def : forall (x:nat). f2 x = val_k (key_of x)
+
+val f2_zero : u:nat -> Lemma(ensures forall (x:nat). f2 x = Z)
+let f2_zero u = ()
+
+(* B3: a two-variable instance, at the goal's peeled (x, y): needs key_of2 x y *)
+assume val p : nat -> nat -> nat
+assume p_def : forall (x:nat) (y:nat). p x y = val_k (key_of2 x y)
+
+val p_zero : u:nat -> Lemma(ensures forall (x:nat) (y:nat). p x y = Z)
+let p_zero u = ()
+
+(* B4: two rounds. Round 1: f4_def at the peeled x proposes key_of x; round 2: key_def
+   at key_of x, a ledger term of sort key only after round 1, proposes
+   item_of (key_of x) *)
+assume val f4 : nat -> nat
+assume val g4 : key -> nat
+assume f4_def : forall (x:nat). f4 x = g4 (key_of x)
+assume key_def : forall (y:key). g4 y = val_i (item_of y)
+
+val f4_zero : u:nat -> Lemma(ensures forall (x:nat). f4 x = Z)
+let f4_zero u = ()

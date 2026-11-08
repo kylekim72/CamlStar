@@ -1,0 +1,106 @@
+module QuantInstBad
+
+(* Negative control for tests/quant_inst.cst: false goals of the same shapes, over the
+   same (consistent) definitions and axioms. Expected today and after item 46: every false
+   goal failed (saturated), none verified, unknown or fuel exhausted (the helper
+   `tick_frame` is true and verifies) — instances at ledger terms
+   are sound, so they cannot make a false goal true, and the instance set of an acyclic
+   signature is finite, so the iteration must still reach its fixpoint. The last case,
+   `cyc_zero_bad`, is cyclic on purpose: `next : nat -> nat` under `forall x:nat` makes
+   the instances next x, next (next x), ... unbounded (the sort graph has the self-loop
+   nat -> nat); what it reports after item 46 (saturated, or the instance bound named) is
+   F4's design decision, but it must never verify and never be unknown. Not run by
+   strip_and_reprove.sh. *)
+
+type nat =
+  | Z : nat
+  | S : nat -> nat
+
+type nlist =
+  | NNil : nlist
+  | NCons : nat -> nlist -> nlist
+
+type state =
+  | St : nlist -> nat -> state
+
+type key =
+  | K : nat -> key
+
+type item =
+  | I : nat -> item
+
+let items (s:state) = match s with | St l c -> l
+
+let rec count (x:nat) (l:nlist) : nat = match l with
+  | NNil -> Z
+  | NCons y r -> if x = y then S (count x r) else count x r
+
+let tick (s:state) = match s with | St l c -> St l (S c)
+
+(* adds x to the items: its count does change *)
+let push (s:state) (x:nat) = match s with | St l c -> St (NCons x l) c
+
+let allc (s:state) = forall (x:nat). count x (items s) = Z
+
+(* ==== A shapes ==== *)
+
+val tick_frame : s:state -> Lemma(ensures forall (x:nat). count x (items (tick s)) = count x (items s))
+let tick_frame s = match s with | St l c -> ()
+
+(* false: pushing x makes its count one *)
+val push_allc_bad : s:state -> x:nat -> Lemma(ensures allc s ==> allc (push s x))
+let push_allc_bad s x = match s with | St l c -> ()
+
+(* false: the frame keeps the counts zero, not one *)
+val tick_one_bad : s:state -> Lemma(ensures allc s ==> (forall (x:nat). count x (items (tick s)) = S Z))
+let tick_one_bad s = let _ = tick_frame s in ()
+
+(* ==== B shapes ==== *)
+
+assume val key_of : nat -> key
+assume val key_of2 : nat -> nat -> key
+assume val item_of : key -> item
+assume val val_k : key -> nat
+assume val val_i : item -> nat
+
+assume val_k_zero : forall (y:key). val_k y = Z
+assume val_i_zero : forall (y:item). val_i y = Z
+
+assume val f2 : nat -> nat
+assume f2_def : forall (x:nat). f2 x = val_k (key_of x)
+
+(* false: the axioms make f2 zero *)
+val f2_one_bad : u:nat -> Lemma(ensures forall (x:nat). f2 x = S Z)
+let f2_one_bad u = ()
+
+assume val p : nat -> nat -> nat
+assume p_def : forall (x:nat) (y:nat). p x y = val_k (key_of2 x y)
+
+(* false, two variables *)
+val p_one_bad : u:nat -> Lemma(ensures forall (x:nat) (y:nat). p x y = S Z)
+let p_one_bad u = ()
+
+assume val f4 : nat -> nat
+assume val g4 : key -> nat
+assume f4_def : forall (x:nat). f4 x = g4 (key_of x)
+assume key_def : forall (y:key). g4 y = val_i (item_of y)
+
+(* false, two rounds *)
+val f4_one_bad : u:nat -> Lemma(ensures forall (x:nat). f4 x = S Z)
+let f4_one_bad u = ()
+
+(* not derivable: nothing is known about w *)
+assume val q : nat -> nat
+assume val w : key -> nat
+assume q_def : forall (x:nat). q x = w (key_of x)
+
+val q_zero_bad : u:nat -> Lemma(ensures forall (x:nat). q x = Z)
+let q_zero_bad u = ()
+
+(* cyclic: next : nat -> nat under forall x:nat *)
+assume val next : nat -> nat
+assume val fc : nat -> nat
+assume fc_def : forall (x:nat). fc x = fc (next x)
+
+val cyc_zero_bad : u:nat -> Lemma(ensures forall (x:nat). fc x = Z)
+let cyc_zero_bad u = ()
