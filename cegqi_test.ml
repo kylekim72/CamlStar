@@ -476,10 +476,57 @@ let () =
     List.find (fun i -> strs i.Cegqi.at = [ "x"; "y" ] && Ast.string_of_term i.Cegqi.body = "(p x y) = (val_k (key_of2 x y))")
       (fst (Cegqi.instances ivc irs))
   in
-  check "instances: p_def at (x, y) has one trigger list per binder"
-    (List.length at_xy.Cegqi.triggers = 2
-     && List.for_all (fun ts -> List.mem "p x y" (strs ts)) at_xy.Cegqi.triggers)
+  check "instances: p_def at (x, y) has one trigger list, its applications over both binders"
+    (List.map strs at_xy.Cegqi.triggers = [ [ "p x y"; "key_of2 x y"; "val_k (key_of2 x y)" ] ])
     (String.concat " | " (List.concat_map strs at_xy.Cegqi.triggers));
+  let two = {|
+module Two
+type nat = | Z : nat | S : nat -> nat
+assume val g : nat -> nat
+assume val h : nat -> nat
+assume two_def : forall (x:nat) (y:nat). g x = h y
+val t : x:nat -> y:nat -> Lemma(ensures g x = Z)
+let t x y = ()
+|} in
+  let tm, tvcs = vcs_of two in
+  let tvc = List.hd tvcs in
+  let at_xy2 =
+    List.find (fun i -> strs i.Cegqi.at = [ "x"; "y" ]) (fst (Cegqi.instances tvc (Axioms.ret_sort_table tm)))
+  in
+  check "instances: with no application over both binders, one trigger list per binder"
+    (List.map strs at_xy2.Cegqi.triggers = [ [ "g x" ]; [ "h y" ] ])
+    (String.concat " | " (List.concat_map strs at_xy2.Cegqi.triggers));
+
+  (* --- projections are no triggers --- *)
+  let pm, pvcs = vcs_of sorts in
+  let pj = Cegqi.projections (Axioms.definitional_equations pm) in
+  check "projections: items (a field accessor) is one, count and mem are not"
+    (pj = [ "items" ]) (String.concat " | " pj);
+  let spec = {|
+module Spec
+type nat = | Z : nat | S : nat -> nat
+type nlist = | NNil : nlist | NCons : nat -> nlist -> nlist
+type state = | St : nlist -> nat -> state
+let items (s:state) = match s with | St l c -> l
+assume val step : state -> state
+assume val size : nlist -> nat
+assume step_spec : forall (s:state). size (items (step s)) = size (items s)
+val t : s:state -> Lemma(ensures size (items (step s)) = Z)
+let t s = ()
+|} in
+  let sm, svcs = vcs_of spec in
+  let svc = List.hd svcs in
+  let srs = Axioms.ret_sort_table sm in
+  let at_s skip =
+    List.find (fun i -> strs i.Cegqi.at = [ "s" ]) (fst (Cegqi.instances ~skip_heads:skip svc srs)) in
+  check "instances: without skip_heads, items s is a trigger of step_spec at s"
+    (List.mem "items s" (List.concat_map strs (at_s []).Cegqi.triggers))
+    (String.concat " | " (List.concat_map strs (at_s []).Cegqi.triggers));
+  check "instances: with projections skipped, the triggers are step s, items (step s) is gone too, size (…) stay"
+    (List.map strs (at_s [ "items" ]).Cegqi.triggers
+     = [ [ "step s"; "size (items (step s))"; "size (items s)" ] ])
+    (String.concat " | " (List.concat_map strs (at_s [ "items" ]).Cegqi.triggers));
+  ignore pvcs;
 
   (* --- candidates: an instance is used only when a trigger is present (F6) --- *)
   let cc = all_candidates connect in

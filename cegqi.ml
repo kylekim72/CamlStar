@@ -96,9 +96,22 @@ let self_feeding (ret_sort : (string, base_typ) Hashtbl.t)
          | _ -> None)
        (binder_apps block))
 
+let projections (eqs : Axioms.defeq list) : string list =
+  let returns_a_field (e : Axioms.defeq) =
+    e.Axioms.de_guards = []
+    && (match e.Axioms.de_rhs with
+        | Tm_var v ->
+          List.exists (fun w -> w.vid = v.vid) (List.concat_map Subst.free_vars_term e.Axioms.de_args)
+        | _ -> false)
+  in
+  let heads = List.sort_uniq compare (List.map (fun e -> e.Axioms.de_fn) eqs) in
+  List.filter
+    (fun f -> List.for_all returns_a_field (List.filter (fun e -> e.Axioms.de_fn = f) eqs))
+    heads
+
 type instance = { at : term list; body : term; triggers : term list list }
 
-let instances ?(cap_block = 1000) ?(cap_round = 5000) (vc : Vc.t)
+let instances ?(cap_block = 1000) ?(cap_round = 5000) ?(skip_heads = []) (vc : Vc.t)
     (ret_sort : (string, base_typ) Hashtbl.t) : instance list * bool =
   (* the terms a binder can be instantiated at: the scope's variables, then the ledger's
      applications, each with its sort *)
@@ -138,13 +151,27 @@ let instances ?(cap_block = 1000) ?(cap_round = 5000) (vc : Vc.t)
         (fun choices acc -> List.concat_map (fun t -> List.map (fun rest -> t :: rest) acc) choices)
         per_binder [ [] ]
     in
-    (* per binder, the body's applications that mention it *)
+    (* the trigger lists: when some application of the body mentions every binder, those
+       applications form the one list (a term covering all the binders must be present,
+       as a trigger over all the variables in E-matching); otherwise one list per binder
+       of the applications that mention it (a multi-pattern). The first keeps a block
+       such as a function's spec, `∀ self frm s. … recv_vote self frm s …`, from being
+       instantiated at tuples no call names just because each binder occurs in some
+       small present term. An application headed by a symbol in [skip_heads] (a
+       projection) is no trigger: every value has its fields, so its presence says
+       nothing about the fact. *)
     let per_binder =
-      let apps = binder_apps block in
-      List.map
-        (fun (b, _) ->
-          List.filter (fun a -> List.exists (fun v -> v.vid = b.vid) (Subst.free_vars_term a)) apps)
-        binders
+      let apps =
+        List.filter
+          (fun a -> match head_spine a [] with
+             | Tm_fvar l, _ -> not (List.mem l.bname skip_heads)
+             | _ -> true)
+          (binder_apps block)
+      in
+      let mentions (b, _) a = List.exists (fun v -> v.vid = b.vid) (Subst.free_vars_term a) in
+      match List.filter (fun a -> List.for_all (fun b -> mentions b a) binders) apps with
+      | _ :: _ as full -> [ full ]
+      | [] -> List.map (fun b -> List.filter (mentions b) apps) binders
     in
     List.map
       (fun tuple ->
@@ -490,7 +517,7 @@ let candidates_with_origin (m : modul) (vc : Vc.t) : (term * string) list * bool
       if !out != before then added := true
     in
     let vc' = { vc with Vc.instantiations = vc.Vc.instantiations @ List.rev_map fst !out } in
-    let insts, c = instances vc' ret_sort in
+    let insts, c = instances ~skip_heads:(projections eqs) vc' ret_sort in
     capped := !capped || c;
     List.iter
       (fun (i : instance) ->

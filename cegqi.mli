@@ -45,10 +45,19 @@ val self_feeding :
   (string, Ast.base_typ) Hashtbl.t -> (Ast.var * Ast.base_typ) list * Ast.term ->
   (Ast.base_typ * string) list
 
+(* The functions that are projections: every definitional equation unguarded and
+   returning one of its pattern variables — a record's field accessors (`let votes (s:R)
+   = match s with MkR … v … -> v`) and hand-written ones (`leader_of`). Their
+   applications are no triggers for [instances]: every value has its fields, so
+   `votes s` being present says nothing about a quantified fact over `s`. *)
+val projections : Axioms.defeq list -> string list
+
 (* One instance of a block: the tuple it is at, the body with the tuple substituted, and
-   its triggers — per binder, the body's applications that mention that binder, at the
-   tuple. An instance is worth generating when every binder has a trigger already present
-   in the query (a multi-pattern). *)
+   its trigger lists, at the tuple: one list of the body's applications that mention
+   every binder when there is one (a trigger over all the variables), else one list per
+   binder of the applications that mention it (a multi-pattern); applications headed by
+   a symbol in [skip_heads] are left out. An instance is worth generating when each list
+   has a member already present in the query. *)
 type instance = { at : Ast.term list; body : Ast.term; triggers : Ast.term list list }
 
 (* The instances of [universal_blocks vc] at the terms the VC can name — its scope
@@ -60,8 +69,8 @@ type instance = { at : Ast.term list; body : Ast.term; triggers : Ast.term list 
    trigger check in [candidates] is what bounds the work); the flag says whether a cap
    was hit. *)
 val instances :
-  ?cap_block:int -> ?cap_round:int -> Vc.t -> (string, Ast.base_typ) Hashtbl.t ->
-  instance list * bool
+  ?cap_block:int -> ?cap_round:int -> ?skip_heads:string list -> Vc.t ->
+  (string, Ast.base_typ) Hashtbl.t -> instance list * bool
 
 (* Add a shape for [key] unless one is already recorded for it. *)
 val add_shape : (Ast.term * Ast.term) list -> Ast.term -> Ast.term -> (Ast.term * Ast.term) list
