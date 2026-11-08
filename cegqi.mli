@@ -57,11 +57,13 @@ val self_feeding :
    per binder, every tuple — as (the tuple, the body with the tuple substituted). A
    binder is not instantiated at a term headed by one of the block's own self-feeding
    heads for that sort unless the term occurs in the goal or a hypothesis: terms a round
-   proposed are refused, terms the VC states are not. At most [cap_block] tuples per
-   block and [cap_round] in all, in order; the flag says whether a cap was hit. *)
+   proposed are refused, terms the VC states are not. With [fresh], only the tuples that
+   mention one of those terms, for iterating to a fixpoint without re-enumerating. At
+   most [cap_block] tuples per block and [cap_round] in all, in order; the flag says
+   whether a cap was hit. *)
 val instances :
-  ?cap_block:int -> ?cap_round:int -> Vc.t -> (string, Ast.base_typ) Hashtbl.t ->
-  (Ast.term list * Ast.term) list * bool
+  ?cap_block:int -> ?cap_round:int -> ?fresh:Ast.term list -> Vc.t ->
+  (string, Ast.base_typ) Hashtbl.t -> (Ast.term list * Ast.term) list * bool
 
 (* Add a shape for [key] unless one is already recorded for it. *)
 val add_shape : (Ast.term * Ast.term) list -> Ast.term -> Ast.term -> (Ast.term * Ast.term) list

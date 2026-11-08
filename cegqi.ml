@@ -115,8 +115,9 @@ let self_feeding (ret_sort : (string, base_typ) Hashtbl.t)
       | _ -> None)
     (inner_apps body)
 
-let instances ?(cap_block = 50) ?(cap_round = 200) (vc : Vc.t)
+let instances ?(cap_block = 50) ?(cap_round = 200) ?fresh (vc : Vc.t)
     (ret_sort : (string, base_typ) Hashtbl.t) : (term list * term) list * bool =
+  let fresh = Option.map (List.map Ast.string_of_term) fresh in
   (* the terms a binder can be instantiated at: the scope's variables, then the ledger's
      applications, each with its sort *)
   let terms =
@@ -154,6 +155,14 @@ let instances ?(cap_block = 50) ?(cap_round = 200) (vc : Vc.t)
       List.fold_right
         (fun choices acc -> List.concat_map (fun t -> List.map (fun rest -> t :: rest) acc) choices)
         per_binder [ [] ]
+    in
+    (* with [fresh], only the tuples that mention one of those terms: the others were
+       enumerated by an earlier call *)
+    let tuples =
+      match fresh with
+      | None -> tuples
+      | Some fs ->
+        List.filter (fun tu -> List.exists (fun t -> List.mem (Ast.string_of_term t) fs) tu) tuples
     in
     List.map
       (fun tuple ->
@@ -465,4 +474,25 @@ let candidates (m : modul) (vc : Vc.t) : term list =
           if u.guards = [] && is_ctor_term ctors u.rhs then sh := add_shape !sh app u.rhs)
         (unroll m eqs !sh app))
     frontier;
+  (* Then the universal blocks, instantiated at the VC's own terms: an instance's inner
+     applications are what the solver's instance of the block needs values for. They go
+     through the same screen, so an application already materialised, or one the scope
+     cannot name (a quantifier of the body's own), is not proposed. Unrolling comes
+     first, so a witness that unfolding alone finds is never attributed to an instance. *)
+  let ret_sort = Axioms.ret_sort_table m in
+  (* To a fixpoint within the round: an instance's application is a ledger term for the
+     next iteration ([key_def] at [key_of x], which [f4_def] at [x] just proposed), so a
+     chain through the sorts closes here instead of costing one solver round per sort.
+     Each iteration after the first looks only at tuples that mention a term the previous
+     one added. The closure is finite when the sorts are layered; a cycle through several
+     blocks is stopped by [instances]' caps and the iteration bound. *)
+  let rec close fresh n =
+    let added = ref [] in
+    let add' t = let before = !out in add t; if !out != before then added := t :: !added in
+    let vc' = { vc with Vc.instantiations = vc.Vc.instantiations @ List.rev !out } in
+    let insts, _capped = instances ?fresh vc' ret_sort in
+    List.iter (fun (_, body) -> List.iter add' (inner_apps body)) insts;
+    if !added <> [] && n < 8 then close (Some !added) (n + 1)
+  in
+  close None 0;
   List.rev !out

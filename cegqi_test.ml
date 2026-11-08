@@ -452,6 +452,11 @@ let () =
   let one, capped1 = Cegqi.instances ~cap_round:4 ivc irs in
   check "instances: cap_round 4 gives 4 in all and reports the cap"
     (List.length one = 4 && capped1) (string_of_int (List.length one));
+  let fr = List.map (fun (tu, _) -> strs tu) (fst (Cegqi.instances ~fresh:[ app "f2" [ x ] ] ivc irs)) in
+  check "instances: fresh keeps only the tuples that mention the fresh term"
+    (fr <> [] && List.for_all (List.mem "f2 x") fr) (String.concat " | " (List.map (String.concat ",") fr));
+  check "instances: fresh f2 x gives 1 + 5 + 1 tuples (f2_def, p_def's five, fc_def)"
+    (List.length fr = 7) (string_of_int (List.length fr));
 
   if !failures = 0 then print_endline "all cegqi tests passed"
   else (Printf.printf "%d failure(s)\n" !failures; exit 1)
