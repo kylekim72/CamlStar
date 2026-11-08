@@ -37,6 +37,32 @@ val sort_of : Vc.t -> (string, Ast.base_typ) Hashtbl.t -> Ast.term -> Ast.base_t
    solver can use. *)
 val universal_blocks : Vc.t -> ((Ast.var * Ast.base_typ) list * Ast.term) list
 
+(* The applications of a formula that occur inside the arguments of an uninterpreted
+   application ([key_of x] in [f x = val_k (key_of x)], [Leader n] and [msgs_of s] in
+   [mem (Leader n) (msgs_of s)]), deduplicated. These are the ones an instance needs
+   values for: in the relational encoding the outermost application of an atom is
+   asserted, the inner ones guard it. *)
+val inner_apps : Ast.term -> Ast.term list
+
+(* The (sort, head) pairs through which a block feeds itself: an inner application of
+   its body that mentions a binder and whose result has a binder's sort ([next] in
+   [forall x:nat. fc x = fc (next x)]). An instance at [t] proposes [next t], of the same
+   sort, which the next round would instantiate at, without end. *)
+val self_feeding :
+  (string, Ast.base_typ) Hashtbl.t -> (Ast.var * Ast.base_typ) list * Ast.term ->
+  (Ast.base_typ * string) list
+
+(* The instances of [universal_blocks vc] at the terms the VC can name — its scope
+   variables and its ledger's applications ([Smtlib.ledger_terms]), chosen by [sort_of]
+   per binder, every tuple — as (the tuple, the body with the tuple substituted). A
+   binder is not instantiated at a term headed by one of the block's own self-feeding
+   heads for that sort unless the term occurs in the goal or a hypothesis: terms a round
+   proposed are refused, terms the VC states are not. At most [cap_block] tuples per
+   block and [cap_round] in all, in order; the flag says whether a cap was hit. *)
+val instances :
+  ?cap_block:int -> ?cap_round:int -> Vc.t -> (string, Ast.base_typ) Hashtbl.t ->
+  (Ast.term list * Ast.term) list * bool
+
 (* Add a shape for [key] unless one is already recorded for it. *)
 val add_shape : (Ast.term * Ast.term) list -> Ast.term -> Ast.term -> (Ast.term * Ast.term) list
 

@@ -208,6 +208,26 @@ val t : u:nat -> Lemma(ensures (forall (a:nat) (b:nat). f a = f b) ==> (exists (
 let t u = ()
 |}
 
+(* item 46, F4: instances of the blocks at the terms the VC can name *)
+let insts = {|
+module Insts
+type nat = | Z : nat | S : nat -> nat
+type key = | K : nat -> key
+assume val f2 : nat -> nat
+assume val key_of : nat -> key
+assume val val_k : key -> nat
+assume val p : nat -> nat -> nat
+assume val key_of2 : nat -> nat -> key
+assume val fc : nat -> nat
+assume val next : nat -> nat
+assume f2_def : forall (x:nat). f2 x = val_k (key_of x)
+assume p_def : forall (x:nat) (y:nat). p x y = val_k (key_of2 x y)
+assume fc_def : forall (x:nat). fc x = fc (next x)
+assume k_def : forall (y:key). val_k y = Z
+val t : x:nat -> y:nat -> Lemma(ensures f2 x = Z)
+let t x y = ()
+|}
+
 let () =
   print_endline "cegqi_test";
 
@@ -374,6 +394,64 @@ let () =
     (only (app "l_iff" [ q Ast.Forall nat_ty atom; Ast.mk_true ]) = []) "";
   check "blocks: a binder with no sort is skipped"
     (only (q Ast.Forall None atom) = []) "";
+
+  (* --- inner_apps, self_feeding, instances (item 46, F4) --- *)
+  let im, ivcs = vcs_of insts in
+  let ivc = List.hd ivcs in
+  let irs = Axioms.ret_sort_table im in
+  let strs ts = List.map Ast.string_of_term ts in
+  let iblocks = Cegqi.universal_blocks ivc in
+  let block_with s =
+    List.find (fun (_, body) ->
+        let b = Ast.string_of_term body in
+        let n = String.length s in
+        let rec has i = i + n <= String.length b && (String.sub b i n = s || has (i + 1)) in
+        has 0)
+      iblocks
+  in
+  let f2_blk = block_with "key_of" and fc_blk = block_with "next" in
+  check "inner_apps: f2 x = val_k (key_of x) has the inner key_of x only"
+    (strs (Cegqi.inner_apps (snd f2_blk)) = [ "key_of x" ])
+    (String.concat " | " (strs (Cegqi.inner_apps (snd f2_blk))));
+  let n = Ast.Tm_var (Ast.fresh_var "n") in
+  let mem_t = app "mem" [ app "Leader" [ n ]; app "msgs_of" [ s ] ] in
+  check "inner_apps: mem (Leader n) (msgs_of s) gives the two arguments, not mem"
+    (strs (Cegqi.inner_apps mem_t) = [ "Leader n"; "msgs_of s" ])
+    (String.concat " | " (strs (Cegqi.inner_apps mem_t)));
+  let sf blk = List.map (fun (b, h) -> Smtlib.sort_of_base b ^ ":" ^ h) (Cegqi.self_feeding irs blk) in
+  check "self_feeding: fc x = fc (next x) feeds nat through next"
+    (sf fc_blk = [ "UI_nat:next" ]) (String.concat " | " (sf fc_blk));
+  check "self_feeding: f2 x = val_k (key_of x) feeds nothing (key_of x is a key)"
+    (sf f2_blk = []) (String.concat " | " (sf f2_blk));
+  let bodies vc = List.map (fun (_, b) -> Ast.string_of_term b) (fst (Cegqi.instances vc irs)) in
+  let got = bodies ivc in
+  let detail = String.concat " | " got in
+  check "instances: f2_def at the scope variable x" (List.mem "(f2 x) = (val_k (key_of x))" got) detail;
+  check "instances: f2_def at the other scope variable y too" (List.mem "(f2 y) = (val_k (key_of y))" got) detail;
+  check "instances: f2_def at the ledger term f2 x" (List.mem "(f2 (f2 x)) = (val_k (key_of (f2 x)))" got) detail;
+  check "instances: p_def gets every tuple, (x, y) included"
+    (List.mem "(p x y) = (val_k (key_of2 x y))" got && List.mem "(p y x) = (val_k (key_of2 y x))" got) detail;
+  check "instances: k_def has no key term to instantiate at"
+    (not (List.exists (fun b -> String.length b >= 6 && String.sub b 0 6 = "(val_k") got)) detail;
+  check "instances: 3 + 9 + 3 + 0 = 15, no cap hit"
+    (List.length got = 15 && not (snd (Cegqi.instances ivc irs))) (string_of_int (List.length got));
+  let x = List.find (fun (v, _) -> v.Ast.vname = "x") ivc.Vc.scope |> fst |> fun v -> Ast.Tm_var v in
+  let proposed = { ivc with Vc.instantiations = [ app "next" [ x ] ] } in
+  let gp = bodies proposed in
+  check "instances: a proposed next x is refused for fc_def (rule 3')"
+    (not (List.mem "(fc (next x)) = (fc (next (next x)))" gp)) (String.concat " | " gp);
+  check "instances: the same next x is allowed for f2_def"
+    (List.mem "(f2 (next x)) = (val_k (key_of (next x)))" gp) (String.concat " | " gp);
+  let stated = { ivc with Vc.goal = app "eq" [ app "fc" [ app "next" [ x ] ]; c "Z" ] } in
+  let gs = bodies stated in
+  check "instances: next x stated in the goal is allowed for fc_def"
+    (List.mem "(fc (next x)) = (fc (next (next x)))" gs) (String.concat " | " gs);
+  let few, capped = Cegqi.instances ~cap_block:2 ivc irs in
+  check "instances: cap_block 2 gives 2 per block and reports the cap"
+    (List.length few = 6 && capped) (string_of_int (List.length few));
+  let one, capped1 = Cegqi.instances ~cap_round:4 ivc irs in
+  check "instances: cap_round 4 gives 4 in all and reports the cap"
+    (List.length one = 4 && capped1) (string_of_int (List.length one));
 
   if !failures = 0 then print_endline "all cegqi tests passed"
   else (Printf.printf "%d failure(s)\n" !failures; exit 1)

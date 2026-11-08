@@ -69,6 +69,101 @@ let universal_blocks (vc : Vc.t) : ((var * base_typ) list * term) list =
   go false vc.Vc.goal;
   List.rev !out
 
+(* ===== instances of the universal blocks ===== *)
+
+let inner_apps (t : term) : term list =
+  let acc = ref [] in
+  let seen : (string, unit) Hashtbl.t = Hashtbl.create 16 in
+  let add a =
+    let s = Ast.string_of_term a in
+    if not (Hashtbl.mem seen s) then (Hashtbl.add seen s (); acc := a :: !acc)
+  in
+  (* [inside]: under the arguments of an uninterpreted application *)
+  let rec go inside t =
+    match t with
+    | Tm_app _ ->
+      let h, args = head_spine t [] in
+      let uninterpreted =
+        match h with
+        | Tm_fvar l -> not (Smtlib.is_interpreted l.bname)
+        | Tm_var _ -> true
+        | _ -> false
+      in
+      if inside && uninterpreted then add t;
+      List.iter (go (inside || uninterpreted)) args
+    | Tm_quant q -> go inside q.qbody
+    | Tm_ascribed (e, _) -> go inside e
+    | _ -> ()
+  in
+  go false t;
+  List.rev !acc
+
+let self_feeding (ret_sort : (string, base_typ) Hashtbl.t)
+    ((binders, body) : (var * base_typ) list * term) : (base_typ * string) list =
+  let sorts = List.map snd binders in
+  let mentions_binder a =
+    List.exists (fun v -> List.exists (fun (b, _) -> b.vid = v.vid) binders)
+      (Subst.free_vars_term a)
+  in
+  List.filter_map
+    (fun a ->
+      match head_spine a [] with
+      | Tm_fvar l, _ when mentions_binder a ->
+        (match Hashtbl.find_opt ret_sort l.bname with
+         | Some s when List.mem s sorts -> Some (s, l.bname)
+         | _ -> None)
+      | _ -> None)
+    (inner_apps body)
+
+let instances ?(cap_block = 50) ?(cap_round = 200) (vc : Vc.t)
+    (ret_sort : (string, base_typ) Hashtbl.t) : (term list * term) list * bool =
+  (* the terms a binder can be instantiated at: the scope's variables, then the ledger's
+     applications, each with its sort *)
+  let terms =
+    List.filter_map
+      (fun t -> match sort_of vc ret_sort t with Some s -> Some (s, t) | None -> None)
+      (List.map (fun (v, _) -> Tm_var v) vc.Vc.scope @ Smtlib.ledger_terms vc)
+  in
+  (* the applications the VC states itself, as opposed to those a round proposed *)
+  let stated : (string, unit) Hashtbl.t = Hashtbl.create 32 in
+  List.iter (fun a -> Hashtbl.replace stated (Ast.string_of_term a) ())
+    (Smtlib.collect_apps (vc.Vc.goal :: vc.Vc.hyps));
+  let capped = ref false in
+  let rec take n = function
+    | [] -> []
+    | _ when n = 0 -> capped := true; []
+    | x :: r -> x :: take (n - 1) r
+  in
+  let of_block ((binders, body) as block) =
+    let feeding = self_feeding ret_sort block in
+    (* a proposed term headed by a symbol through which the block feeds a binder of that
+       sort is skipped: instantiating there would propose the next term of the same
+       shape, without end. Terms the VC states itself are always allowed. *)
+    let allowed (s : base_typ) (t : term) =
+      match head_spine t [] with
+      | Tm_fvar l, _ :: _ when List.mem (s, l.bname) feeding ->
+        Hashtbl.mem stated (Ast.string_of_term t)
+      | _ -> true
+    in
+    let per_binder =
+      List.map
+        (fun (_, s) -> List.filter_map (fun (s', t) -> if s' = s && allowed s t then Some t else None) terms)
+        binders
+    in
+    let tuples =
+      List.fold_right
+        (fun choices acc -> List.concat_map (fun t -> List.map (fun rest -> t :: rest) acc) choices)
+        per_binder [ [] ]
+    in
+    List.map
+      (fun tuple ->
+        (tuple, Subst.subst_term (List.combine (List.map fst binders) tuple) body))
+      (take cap_block tuples)
+  in
+  let all = List.concat_map of_block (universal_blocks vc) in
+  let kept = take cap_round all in
+  (kept, !capped)
+
 (* ===== shapes ===== *)
 
 (* Hypotheses arrive as single propositions, but a branch can contribute a conjunction
