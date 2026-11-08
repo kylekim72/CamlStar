@@ -26,6 +26,17 @@ val shapes : Ast.modul -> Vc.t -> (Ast.term * Ast.term) list
    [Tm_fvar] head is a saturated application or a nullary constructor. *)
 val sort_of : Vc.t -> (string, Ast.base_typ) Hashtbl.t -> Ast.term -> Ast.base_typ option
 
+(* The quantifier blocks the query asserts universally, as (binders with their sorts,
+   body): a [forall] block in a hypothesis or an axiom of [vc.axioms] in positive
+   position, an [exists] block in the goal in negative position (the query negates the
+   goal), with polarity flipped through [not] and the left of [==>]. A block is the
+   maximal run of one kind of quantifier; nothing under a quantifier of the other kind,
+   under [<==>] or inside an atom counts, and a block with an unsorted binder is skipped.
+   Instances of these blocks are never asserted, only their applications proposed as
+   witnesses, which is sound for any term; polarity decides only which instances the
+   solver can use. *)
+val universal_blocks : Vc.t -> ((Ast.var * Ast.base_typ) list * Ast.term) list
+
 (* Add a shape for [key] unless one is already recorded for it. *)
 val add_shape : (Ast.term * Ast.term) list -> Ast.term -> Ast.term -> (Ast.term * Ast.term) list
 

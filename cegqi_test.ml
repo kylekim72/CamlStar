@@ -195,6 +195,19 @@ val t : s:state -> x:nat -> Lemma(ensures count x (items s) = count x (items s))
 let t s x = ()
 |}
 
+(* item 46, F3: the quantifier blocks a query asserts universally *)
+let blocks = {|
+module Blocks
+type nat = | Z : nat | S : nat -> nat
+assume val f : nat -> nat
+assume val k : nat -> nat
+assume f_def : forall (x:nat). f x = k x
+assume some_zero : exists (x:nat). f x = Z
+assume total : forall (x:nat). exists (y:nat). f x = y
+val t : u:nat -> Lemma(ensures (forall (a:nat) (b:nat). f a = f b) ==> (exists (z:nat). f z = Z))
+let t u = ()
+|}
+
 let () =
   print_endline "cegqi_test";
 
@@ -330,6 +343,37 @@ let () =
   expect "a variable not in scope (bound by a quantifier)" (Ast.Tm_var (Ast.fresh_var "y")) "None";
   expect "a literal" (Ast.Tm_const (Ast.C_bool true)) "None";
   expect "an unknown head" (app "nosuch" [ x ]) "None";
+
+  (* --- universal_blocks (item 46, F3) --- *)
+  let _, bvcs = vcs_of blocks in
+  let bvc = List.hd bvcs in
+  let show (bs, body) =
+    String.concat " " (List.map (fun (v, _) -> v.Ast.vname) bs) ^ ". " ^ Ast.string_of_term body in
+  let blks vc = List.map show (Cegqi.universal_blocks vc) in
+  let got = blks bvc in
+  let has prefix = List.exists (fun b -> String.length b >= String.length prefix
+                                         && String.sub b 0 (String.length prefix) = prefix) got in
+  let detail = String.concat " | " got in
+  check "blocks: an axiom's forall is a block" (has "x. (f x) = (k x)") detail;
+  check "blocks: an existential axiom is not" (not (has "x. (f x) = Z")) detail;
+  check "blocks: forall-exists gives the forall, its body keeps the exists"
+    (has "x. exists") detail;
+  check "blocks: a goal's premise forall, two binders merged" (has "a b. ") detail;
+  check "blocks: a goal's exists (negated: universal)" (has "z. ") detail;
+  check "blocks: exactly these four" (List.length got = 4) detail;
+  let y = Ast.fresh_var "y" in
+  let q k ty body = Ast.Tm_quant { Ast.qk = k; qv = y; qty = ty; qbody = body } in
+  let nat_ty = Some (Ast.T_refine { Ast.rbase = Ast.B_app (Ast.lid_of_str "nat", []);
+                                    rv = y; rphi = Ast.mk_true }) in
+  let atom = app "eq" [ app "f" [ Ast.Tm_var y ]; c "Z" ] in
+  let only h = blks { bvc with Vc.hyps = [ h ]; axioms = []; goal = Ast.mk_true } in
+  check "blocks: not (exists y. ...) in a hypothesis is universal"
+    (only (app "l_not" [ q Ast.Exists nat_ty atom ]) = [ "y. " ^ Ast.string_of_term atom ])
+    (String.concat " | " (only (app "l_not" [ q Ast.Exists nat_ty atom ])));
+  check "blocks: a forall under <==> is not a block"
+    (only (app "l_iff" [ q Ast.Forall nat_ty atom; Ast.mk_true ]) = []) "";
+  check "blocks: a binder with no sort is skipped"
+    (only (q Ast.Forall None atom) = []) "";
 
   if !failures = 0 then print_endline "all cegqi tests passed"
   else (Printf.printf "%d failure(s)\n" !failures; exit 1)

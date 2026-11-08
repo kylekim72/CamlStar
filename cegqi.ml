@@ -37,6 +37,38 @@ let sort_of (vc : Vc.t) (ret_sort : (string, base_typ) Hashtbl.t) (t : term) :
   | Tm_fvar l, _ -> Hashtbl.find_opt ret_sort l.bname
   | _ -> None
 
+(* ===== universal positions ===== *)
+
+let universal_blocks (vc : Vc.t) : ((var * base_typ) list * term) list =
+  let out = ref [] in
+  (* the maximal run of [k]-quantifiers at the top of [t]: its binders with their sorts
+     ([None] if one has no sort), and the body under them *)
+  let rec prefix k t =
+    match t with
+    | Tm_quant { qk; qv; qty; qbody } when qk = k ->
+      let bs, body = prefix k qbody in
+      let b = match qty with Some (T_refine { rbase; _ }) -> Some (qv, rbase) | _ -> None in
+      ((match b, bs with Some b, Some bs -> Some (b :: bs) | _ -> None), body)
+    | _ -> (Some [], t)
+  in
+  (* [pos]: the formula is asserted as is ([true]) or negated ([false]) *)
+  let rec go pos t =
+    match t with
+    | Tm_quant { qk; _ } when qk = (if pos then Forall else Exists) ->
+      (match prefix qk t with Some bs, body -> out := (bs, body) :: !out | None, _ -> ())
+    | Tm_ascribed (e, _) -> go pos e
+    | Tm_app _ ->
+      (match head_spine t [] with
+       | Tm_fvar l, [ a; b ] when l.bname = "l_and" || l.bname = "l_or" -> go pos a; go pos b
+       | Tm_fvar l, [ a; b ] when l.bname = "l_imp" -> go (not pos) a; go pos b
+       | Tm_fvar l, [ a ] when l.bname = "l_not" -> go (not pos) a
+       | _ -> ())
+    | _ -> ()
+  in
+  List.iter (go true) (vc.Vc.hyps @ vc.Vc.axioms);
+  go false vc.Vc.goal;
+  List.rev !out
+
 (* ===== shapes ===== *)
 
 (* Hypotheses arrive as single propositions, but a branch can contribute a conjunction
