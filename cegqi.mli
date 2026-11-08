@@ -37,33 +37,31 @@ val sort_of : Vc.t -> (string, Ast.base_typ) Hashtbl.t -> Ast.term -> Ast.base_t
    solver can use. *)
 val universal_blocks : Vc.t -> ((Ast.var * Ast.base_typ) list * Ast.term) list
 
-(* The applications of a formula that occur inside the arguments of an uninterpreted
-   application ([key_of x] in [f x = val_k (key_of x)], [Leader n] and [msgs_of s] in
-   [mem (Leader n) (msgs_of s)]), deduplicated. These are the ones an instance needs
-   values for: in the relational encoding the outermost application of an atom is
-   asserted, the inner ones guard it. *)
-val inner_apps : Ast.term -> Ast.term list
-
-(* The (sort, head) pairs through which a block feeds itself: an inner application of
-   its body that mentions a binder and whose result has a binder's sort ([next] in
+(* The (sort, head) pairs through which a block feeds itself: an application of its
+   body that mentions a binder and whose result has a binder's sort ([fc] and [next] in
    [forall x:nat. fc x = fc (next x)]). An instance at [t] proposes [next t], of the same
-   sort, which the next round would instantiate at, without end. *)
+   sort, which the next round would instantiate at, without end. Deduplicated, sorted. *)
 val self_feeding :
   (string, Ast.base_typ) Hashtbl.t -> (Ast.var * Ast.base_typ) list * Ast.term ->
   (Ast.base_typ * string) list
 
+(* One instance of a block: the tuple it is at, the body with the tuple substituted, and
+   its triggers — per binder, the body's applications that mention that binder, at the
+   tuple. An instance is worth generating when every binder has a trigger already present
+   in the query (a multi-pattern). *)
+type instance = { at : Ast.term list; body : Ast.term; triggers : Ast.term list list }
+
 (* The instances of [universal_blocks vc] at the terms the VC can name — its scope
    variables and its ledger's applications ([Smtlib.ledger_terms]), chosen by [sort_of]
-   per binder, every tuple — as (the tuple, the body with the tuple substituted). A
-   binder is not instantiated at a term headed by one of the block's own self-feeding
-   heads for that sort unless the term occurs in the goal or a hypothesis: terms a round
-   proposed are refused, terms the VC states are not. With [fresh], only the tuples that
-   mention one of those terms, for iterating to a fixpoint without re-enumerating. At
-   most [cap_block] tuples per block and [cap_round] in all, in order; the flag says
-   whether a cap was hit. *)
+   per binder, every tuple. A binder is not instantiated at a term headed by one of the
+   block's own self-feeding heads for that sort unless the term occurs in the goal or a
+   hypothesis: terms a round proposed are refused, terms the VC states are not. At most
+   [cap_block] tuples per block and [cap_round] in all, in order (a safety net: the
+   trigger check in [candidates] is what bounds the work); the flag says whether a cap
+   was hit. *)
 val instances :
-  ?cap_block:int -> ?cap_round:int -> ?fresh:Ast.term list -> Vc.t ->
-  (string, Ast.base_typ) Hashtbl.t -> (Ast.term list * Ast.term) list * bool
+  ?cap_block:int -> ?cap_round:int -> Vc.t -> (string, Ast.base_typ) Hashtbl.t ->
+  instance list * bool
 
 (* Add a shape for [key] unless one is already recorded for it. *)
 val add_shape : (Ast.term * Ast.term) list -> Ast.term -> Ast.term -> (Ast.term * Ast.term) list
@@ -98,3 +96,9 @@ val unfolding_terms : unfolding -> Ast.term list
    over [vc.scope]. [[]] means **saturation** — nothing left to instantiate, so what
    remains needs a lemma. *)
 val candidates : Ast.modul -> Vc.t -> Ast.term list
+
+(* [candidates] with, per term, where it came from — ["unrolling"], or
+   ["instance at (t1, …, tn)"] for the inner application of a universal block's
+   instance at that tuple — and whether [instances]' caps were hit this round. For the
+   trace. *)
+val candidates_with_origin : Ast.modul -> Vc.t -> (Ast.term * string) list * bool

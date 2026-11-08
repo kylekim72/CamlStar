@@ -12,11 +12,11 @@ module QuantInst
    B. an application with a *bound* variable in an argument position (`k x` in
       `forall x. f x = g (k x)`): CEGQI never proposes it, at any term.
 
-   (The outermost application of an equation's right side is asserted, not guarded, so it
-   needs no value: `g (k x)` above needs only `k x`.) Expected: the controls verify; the A
-   cases verify, since the ground applications under a quantifier are materialised like
-   hints; every B case fails (saturated) until instances at ledger terms are proposed, then
-   all verify. Hand check of the target (2026-11-07, on scratch copies): before the A fix,
+   Expected: the controls verify; the A cases verify, since the ground applications under
+   a quantifier are materialised like hints; the B cases verify once the universal blocks
+   are instantiated at the terms the VC names — only where an application of the instance
+   over a binder is already present (`f2 x` in the goal), proposing the instance's other
+   applications (`key_of x`). Hand check of the target (2026-11-07, on scratch copies): before the A fix,
    each A case verified with `instantiate!(items s)`; a proof cannot name the goal's
    peeled variable (item 52), so each B case was checked on a twin with that variable as
    a lemma parameter, which

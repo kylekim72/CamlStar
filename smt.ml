@@ -177,7 +177,7 @@ let build_query (m : modul) (ret_sort : string -> base_typ) (vc : Vc.t) : string
   let in_scope (v : var) = List.exists (fun (s, _) -> s.vid = v.vid) vc.Vc.scope in
   let under_quant =
     List.filter (fun t -> List.for_all in_scope (Subst.free_vars_term t))
-      (Smtlib.ground_apps_under_quantifiers (vc.Vc.goal :: vc.Vc.hyps))
+      (Smtlib.ground_apps_under_quantifiers (vc.Vc.goal :: (vc.Vc.hyps @ vc.Vc.axioms)))
   in
   let quant_binds = List.concat_map (Anf.hoist (is_pred ret_sort)) under_quant in
   let mat = materialize_binds ret_sort (ground_lets anf_f @ hint_binds @ quant_binds) in
@@ -304,18 +304,20 @@ let solve_module ?dump_dir ?(cegqi = true) ?(fuel = 3) ?(trace = false)
           if not cegqi then (vc, Saturated cex)
           else if round >= fuel then (vc, Fuel_exhausted cex)
           else
-            let cands = Cegqi.candidates m vc in
+            let cands_o, capped = Cegqi.candidates_with_origin m vc in
+            let cands = List.map fst cands_o in
             if cands = [] then (vc, Saturated cex)
             else begin
               if trace then begin
-                Printf.printf "  · cegqi round %d of %s: +%d instantiation(s)\n"
-                  (round + 1) vc0.Vc.reason (List.length cands);
+                Printf.printf "  · cegqi round %d of %s: +%d instantiation(s)%s\n"
+                  (round + 1) vc0.Vc.reason (List.length cands)
+                  (if capped then " (instance cap hit)" else "");
                 List.iter
-                  (fun t ->
+                  (fun (t, origin) ->
                     let d = match Cegqi.eval_in_cex cex t with
                       | None -> "undefined in model" | Some _ -> "defined in model" in
-                    Printf.printf "      %s   (%s)\n" (Ast.string_of_term t) d)
-                  cands;
+                    Printf.printf "      %s   (%s; %s)\n" (Ast.string_of_term t) d origin)
+                  cands_o;
                 (* a progress trace is only useful if it appears as it happens *)
                 flush stdout
               end;

@@ -56,6 +56,9 @@ let universal_blocks (vc : Vc.t) : ((var * base_typ) list * term) list =
     match t with
     | Tm_quant { qk; _ } when qk = (if pos then Forall else Exists) ->
       (match prefix qk t with Some bs, body -> out := (bs, body) :: !out | None, _ -> ())
+    (* the other kind is a Skolem constant of the query: a block under it is still
+       universal, and an application over the constant fails the scope check later *)
+    | Tm_quant { qbody; _ } -> go pos qbody
     | Tm_ascribed (e, _) -> go pos e
     | Tm_app _ ->
       (match head_spine t [] with
@@ -71,53 +74,32 @@ let universal_blocks (vc : Vc.t) : ((var * base_typ) list * term) list =
 
 (* ===== instances of the universal blocks ===== *)
 
-let inner_apps (t : term) : term list =
-  let acc = ref [] in
-  let seen : (string, unit) Hashtbl.t = Hashtbl.create 16 in
-  let add a =
-    let s = Ast.string_of_term a in
-    if not (Hashtbl.mem seen s) then (Hashtbl.add seen s (); acc := a :: !acc)
-  in
-  (* [inside]: under the arguments of an uninterpreted application *)
-  let rec go inside t =
-    match t with
-    | Tm_app _ ->
-      let h, args = head_spine t [] in
-      let uninterpreted =
-        match h with
-        | Tm_fvar l -> not (Smtlib.is_interpreted l.bname)
-        | Tm_var _ -> true
-        | _ -> false
-      in
-      if inside && uninterpreted then add t;
-      List.iter (go (inside || uninterpreted)) args
-    | Tm_quant q -> go inside q.qbody
-    | Tm_ascribed (e, _) -> go inside e
-    | _ -> ()
-  in
-  go false t;
-  List.rev !acc
+(* the applications of a block's body that mention one of its binders *)
+let binder_apps ((binders, body) : (var * base_typ) list * term) : term list =
+  List.filter
+    (fun a ->
+      List.exists (fun v -> List.exists (fun (b, _) -> b.vid = v.vid) binders)
+        (Subst.free_vars_term a))
+    (Smtlib.collect_apps [ body ])
 
 let self_feeding (ret_sort : (string, base_typ) Hashtbl.t)
-    ((binders, body) : (var * base_typ) list * term) : (base_typ * string) list =
+    ((binders, _) as block : (var * base_typ) list * term) : (base_typ * string) list =
   let sorts = List.map snd binders in
-  let mentions_binder a =
-    List.exists (fun v -> List.exists (fun (b, _) -> b.vid = v.vid) binders)
-      (Subst.free_vars_term a)
-  in
-  List.filter_map
-    (fun a ->
-      match head_spine a [] with
-      | Tm_fvar l, _ when mentions_binder a ->
-        (match Hashtbl.find_opt ret_sort l.bname with
-         | Some s when List.mem s sorts -> Some (s, l.bname)
+  List.sort_uniq compare
+    (List.filter_map
+       (fun a ->
+         match head_spine a [] with
+         | Tm_fvar l, _ ->
+           (match Hashtbl.find_opt ret_sort l.bname with
+            | Some s when List.mem s sorts -> Some (s, l.bname)
+            | _ -> None)
          | _ -> None)
-      | _ -> None)
-    (inner_apps body)
+       (binder_apps block))
 
-let instances ?(cap_block = 50) ?(cap_round = 200) ?fresh (vc : Vc.t)
-    (ret_sort : (string, base_typ) Hashtbl.t) : (term list * term) list * bool =
-  let fresh = Option.map (List.map Ast.string_of_term) fresh in
+type instance = { at : term list; body : term; triggers : term list list }
+
+let instances ?(cap_block = 1000) ?(cap_round = 5000) (vc : Vc.t)
+    (ret_sort : (string, base_typ) Hashtbl.t) : instance list * bool =
   (* the terms a binder can be instantiated at: the scope's variables, then the ledger's
      applications, each with its sort *)
   let terms =
@@ -156,17 +138,19 @@ let instances ?(cap_block = 50) ?(cap_round = 200) ?fresh (vc : Vc.t)
         (fun choices acc -> List.concat_map (fun t -> List.map (fun rest -> t :: rest) acc) choices)
         per_binder [ [] ]
     in
-    (* with [fresh], only the tuples that mention one of those terms: the others were
-       enumerated by an earlier call *)
-    let tuples =
-      match fresh with
-      | None -> tuples
-      | Some fs ->
-        List.filter (fun tu -> List.exists (fun t -> List.mem (Ast.string_of_term t) fs) tu) tuples
+    (* per binder, the body's applications that mention it *)
+    let per_binder =
+      let apps = binder_apps block in
+      List.map
+        (fun (b, _) ->
+          List.filter (fun a -> List.exists (fun v -> v.vid = b.vid) (Subst.free_vars_term a)) apps)
+        binders
     in
     List.map
       (fun tuple ->
-        (tuple, Subst.subst_term (List.combine (List.map fst binders) tuple) body))
+        let sigma = List.combine (List.map fst binders) tuple in
+        { at = tuple; body = Subst.subst_term sigma body;
+          triggers = List.map (List.map (Subst.subst_term sigma)) per_binder })
       (take cap_block tuples)
   in
   let all = List.concat_map of_block (universal_blocks vc) in
@@ -421,7 +405,7 @@ let unfolding_terms (u : unfolding) : term list = u.rhs :: u.guards
 
 (* ===== candidate selection ===== *)
 
-let candidates (m : modul) (vc : Vc.t) : term list =
+let candidates_with_origin (m : modul) (vc : Vc.t) : (term * string) list * bool =
   let eqs = Axioms.definitional_equations m in
   let ctors = ctor_names m in
   (* grows within the round with derived shapes (below) *)
@@ -452,12 +436,12 @@ let candidates (m : modul) (vc : Vc.t) : term list =
   let adds_something t =
     List.exists (fun sub -> not (is_present sub)) (Smtlib.collect_apps [ t ])
   in
-  let add t =
+  let add origin t =
     if (not (is_present t)) && closed t && adds_something t then begin
       mark t;
       (* the subterms it materialises are present from now on, too *)
       List.iter mark (Smtlib.collect_apps [ t ]);
-      out := t :: !out
+      out := (t, origin) :: !out
     end
   in
   (* [ledger_terms] is inner-first, so inner applications are unfolded before the outer
@@ -470,7 +454,7 @@ let candidates (m : modul) (vc : Vc.t) : term list =
     (fun app ->
       List.iter
         (fun (u : unfolding) ->
-          List.iter add (unfolding_terms u);
+          List.iter (add "unrolling") (unfolding_terms u);
           if u.guards = [] && is_ctor_term ctors u.rhs then sh := add_shape !sh app u.rhs)
         (unroll m eqs !sh app))
     frontier;
@@ -480,19 +464,46 @@ let candidates (m : modul) (vc : Vc.t) : term list =
      cannot name (a quantifier of the body's own), is not proposed. Unrolling comes
      first, so a witness that unfolding alone finds is never attributed to an instance. *)
   let ret_sort = Axioms.ret_sort_table m in
-  (* To a fixpoint within the round: an instance's application is a ledger term for the
-     next iteration ([key_def] at [key_of x], which [f4_def] at [x] just proposed), so a
-     chain through the sorts closes here instead of costing one solver round per sort.
-     Each iteration after the first looks only at tuples that mention a term the previous
-     one added. The closure is finite when the sorts are layered; a cycle through several
-     blocks is stopped by [instances]' caps and the iteration bound. *)
-  let rec close fresh n =
-    let added = ref [] in
-    let add' t = let before = !out in add t; if !out != before then added := t :: !added in
-    let vc' = { vc with Vc.instantiations = vc.Vc.instantiations @ List.rev !out } in
-    let insts, _capped = instances ?fresh vc' ret_sort in
-    List.iter (fun (_, body) -> List.iter add' (inner_apps body)) insts;
-    if !added <> [] && n < 8 then close (Some !added) (n + 1)
+  (* An instance is generated only when every binder is covered by a present trigger —
+     an application of the body over that binder, at the tuple — as with an E-matching
+     multi-pattern: then the solver's own instance speaks about terms the query has, and
+     what it still lacks are values for the instance's other applications, which are
+     proposed (every application: in the
+     relational encoding an atom's applications are guarded by their values, except the
+     one an equality pins to a constant, and proposing that one too is harmless). This is
+     E-matching's discipline with every binder-dependent application as a pattern, and it
+     is what keeps the breadth down: a block over nat is not instantiated at every nat
+     term, only where the query already mentions it.
+
+     To a fixpoint within the round: a proposed application is a ledger term, and may be
+     another instance's trigger, for the next iteration ([key_def] at [key_of x] once
+     [f4_def] at [x] has proposed [g4 (key_of x)]), so a chain through the sorts closes
+     here instead of costing one solver round per sort. Finite when the sorts are layered
+     or the self-feeding rule applies; a cycle through several blocks is stopped by
+     [instances]' caps and the iteration bound. *)
+  let capped = ref false in
+  let rec close n =
+    let added = ref false in
+    let add' origin t =
+      let before = !out in
+      add origin t;
+      if !out != before then added := true
+    in
+    let vc' = { vc with Vc.instantiations = vc.Vc.instantiations @ List.rev_map fst !out } in
+    let insts, c = instances vc' ret_sort in
+    capped := !capped || c;
+    List.iter
+      (fun (i : instance) ->
+        if List.for_all (List.exists is_present) i.triggers then begin
+          let origin =
+            "instance at (" ^ String.concat ", " (List.map Ast.string_of_term i.at) ^ ")" in
+          List.iter (add' origin) (Smtlib.collect_apps [ i.body ])
+        end)
+      insts;
+    if !added && n < 8 then close (n + 1)
   in
-  close None 0;
-  List.rev !out
+  close 0;
+  (List.rev !out, !capped)
+
+let candidates (m : modul) (vc : Vc.t) : term list =
+  List.map fst (fst (candidates_with_origin m vc))

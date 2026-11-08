@@ -228,6 +228,22 @@ val t : x:nat -> y:nat -> Lemma(ensures f2 x = Z)
 let t x y = ()
 |}
 
+(* item 46, F6: only an instance with a present trigger is used *)
+let connect = {|
+module Connect
+type nat = | Z : nat | S : nat -> nat
+type key = | K : nat -> key
+assume val f2 : nat -> nat
+assume val key_of : nat -> key
+assume val val_k : key -> nat
+assume val fc : nat -> nat
+assume val next : nat -> nat
+assume f2_def : forall (x:nat). f2 x = val_k (key_of x)
+assume fc_def : forall (x:nat). fc x = fc (next x)
+val t : x:nat -> Lemma(ensures fc x = Z)
+let t x = ()
+|}
+
 let () =
   print_endline "cegqi_test";
 
@@ -394,6 +410,11 @@ let () =
     (only (app "l_iff" [ q Ast.Forall nat_ty atom; Ast.mk_true ]) = []) "";
   check "blocks: a binder with no sort is skipped"
     (only (q Ast.Forall None atom) = []) "";
+  let w = Ast.fresh_var "w" in
+  let qw body = Ast.Tm_quant { Ast.qk = Ast.Exists; qv = w; qty = nat_ty; qbody = body } in
+  check "blocks: a forall under a hypothesis' exists (a Skolem constant) is a block"
+    (only (qw (q Ast.Forall nat_ty atom)) = [ "y. " ^ Ast.string_of_term atom ])
+    (String.concat " | " (only (qw (q Ast.Forall nat_ty atom))));
 
   (* --- inner_apps, self_feeding, instances (item 46, F4) --- *)
   let im, ivcs = vcs_of insts in
@@ -410,20 +431,12 @@ let () =
       iblocks
   in
   let f2_blk = block_with "key_of" and fc_blk = block_with "next" in
-  check "inner_apps: f2 x = val_k (key_of x) has the inner key_of x only"
-    (strs (Cegqi.inner_apps (snd f2_blk)) = [ "key_of x" ])
-    (String.concat " | " (strs (Cegqi.inner_apps (snd f2_blk))));
-  let n = Ast.Tm_var (Ast.fresh_var "n") in
-  let mem_t = app "mem" [ app "Leader" [ n ]; app "msgs_of" [ s ] ] in
-  check "inner_apps: mem (Leader n) (msgs_of s) gives the two arguments, not mem"
-    (strs (Cegqi.inner_apps mem_t) = [ "Leader n"; "msgs_of s" ])
-    (String.concat " | " (strs (Cegqi.inner_apps mem_t)));
   let sf blk = List.map (fun (b, h) -> Smtlib.sort_of_base b ^ ":" ^ h) (Cegqi.self_feeding irs blk) in
-  check "self_feeding: fc x = fc (next x) feeds nat through next"
-    (sf fc_blk = [ "UI_nat:next" ]) (String.concat " | " (sf fc_blk));
-  check "self_feeding: f2 x = val_k (key_of x) feeds nothing (key_of x is a key)"
-    (sf f2_blk = []) (String.concat " | " (sf f2_blk));
-  let bodies vc = List.map (fun (_, b) -> Ast.string_of_term b) (fst (Cegqi.instances vc irs)) in
+  check "self_feeding: fc x = fc (next x) feeds nat through fc and next"
+    (sf fc_blk = [ "UI_nat:fc"; "UI_nat:next" ]) (String.concat " | " (sf fc_blk));
+  check "self_feeding: f2 x = val_k (key_of x) feeds nat through f2 and val_k, not key_of"
+    (sf f2_blk = [ "UI_nat:f2"; "UI_nat:val_k" ]) (String.concat " | " (sf f2_blk));
+  let bodies vc = List.map (fun i -> Ast.string_of_term i.Cegqi.body) (fst (Cegqi.instances vc irs)) in
   let got = bodies ivc in
   let detail = String.concat " | " got in
   check "instances: f2_def at the scope variable x" (List.mem "(f2 x) = (val_k (key_of x))" got) detail;
@@ -452,11 +465,31 @@ let () =
   let one, capped1 = Cegqi.instances ~cap_round:4 ivc irs in
   check "instances: cap_round 4 gives 4 in all and reports the cap"
     (List.length one = 4 && capped1) (string_of_int (List.length one));
-  let fr = List.map (fun (tu, _) -> strs tu) (fst (Cegqi.instances ~fresh:[ app "f2" [ x ] ] ivc irs)) in
-  check "instances: fresh keeps only the tuples that mention the fresh term"
-    (fr <> [] && List.for_all (List.mem "f2 x") fr) (String.concat " | " (List.map (String.concat ",") fr));
-  check "instances: fresh f2 x gives 1 + 5 + 1 tuples (f2_def, p_def's five, fc_def)"
-    (List.length fr = 7) (string_of_int (List.length fr));
+  let at_x =
+    List.find (fun i -> strs i.Cegqi.at = [ "x" ] && Ast.string_of_term i.Cegqi.body = "(f2 x) = (val_k (key_of x))")
+      (fst (Cegqi.instances ivc irs))
+  in
+  check "instances: f2_def at x has, for its one binder, triggers f2 x, key_of x, val_k (key_of x)"
+    (List.map strs at_x.Cegqi.triggers = [ [ "f2 x"; "key_of x"; "val_k (key_of x)" ] ])
+    (String.concat " | " (List.concat_map strs at_x.Cegqi.triggers));
+  let at_xy =
+    List.find (fun i -> strs i.Cegqi.at = [ "x"; "y" ] && Ast.string_of_term i.Cegqi.body = "(p x y) = (val_k (key_of2 x y))")
+      (fst (Cegqi.instances ivc irs))
+  in
+  check "instances: p_def at (x, y) has one trigger list per binder"
+    (List.length at_xy.Cegqi.triggers = 2
+     && List.for_all (fun ts -> List.mem "p x y" (strs ts)) at_xy.Cegqi.triggers)
+    (String.concat " | " (List.concat_map strs at_xy.Cegqi.triggers));
+
+  (* --- candidates: an instance is used only when a trigger is present (F6) --- *)
+  let cc = all_candidates connect in
+  let dc = String.concat " | " cc in
+  check "connected: fc_def at x (fc x is the goal's) proposes next x and fc (next x)"
+    (List.mem "next x" cc && List.mem "fc (next x)" cc) dc;
+  check "connected: f2_def is not instantiated, no application of it is present"
+    (not (List.exists (fun c -> String.length c >= 6 && String.sub c 0 6 = "key_of") cc)) dc;
+  check "connected: fc_def is not re-instantiated at next x (self-feeding), so no next (next x)"
+    (not (List.mem "next (next x)" cc)) dc;
 
   if !failures = 0 then print_endline "all cegqi tests passed"
   else (Printf.printf "%d failure(s)\n" !failures; exit 1)
