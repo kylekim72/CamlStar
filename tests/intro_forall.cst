@@ -1,0 +1,104 @@
+module IntroForall
+
+(* Item 52, `introduce forall`: names for the goal's quantified variables, so a proof
+   can case-split, call a lemma or write a hint at them. `introduce forall (x:t) … . phi
+   with e` proves the goal's conjunct that is alpha-equal to `forall x … . phi` (after the
+   quantified predicates are unfolded) by checking `e` with the x in scope; the other
+   conjuncts are checked as before. Expected before the feature: a parse error. After:
+   every lemma verifies; each proof fails without its `introduce` body (the split, the
+   call or the hint is what closes it). The false goals are tests/intro_forall_bad.cst,
+   the non-matching formula tests/intro_forall_err.cst. *)
+
+type node =
+  | N1 : node
+  | N2 : node
+  | N3 : node
+
+type nat =
+  | Z : nat
+  | S : nat -> nat
+
+type onode =
+  | NoneN : onode
+  | SomeN : node -> onode
+
+(* a map node -> onode as a list of pairs, as in leader_election.cst *)
+type lmap =
+  | LNil : lmap
+  | LCons : node -> onode -> lmap -> lmap
+
+let rec sel_l (m:lmap) (k:node) = match m with
+  | LNil -> NoneN
+  | LCons k' v r -> if k = k' then v else sel_l r k
+
+(* 1. the case split the solver does not do by itself: an onode is NoneN or SomeN v *)
+val exh : m:lmap -> Lemma(ensures forall (n:node). sel_l m n = NoneN \/ (exists (v:node). sel_l m n = SomeN v))
+let exh m =
+  introduce forall (n:node). sel_l m n = NoneN \/ (exists (v:node). sel_l m n = SomeN v) with
+    (match sel_l m n with
+     | NoneN -> ()
+     | SomeN v -> ())
+
+(* 2. two binders *)
+val exh2 : m:lmap ->
+  Lemma(ensures forall (n1:node) (n2:node).
+          (sel_l m n1 = NoneN \/ (exists (v:node). sel_l m n1 = SomeN v))
+          /\ (sel_l m n2 = NoneN \/ (exists (v:node). sel_l m n2 = SomeN v)))
+let exh2 m =
+  introduce forall (n1:node) (n2:node).
+      (sel_l m n1 = NoneN \/ (exists (v:node). sel_l m n1 = SomeN v))
+      /\ (sel_l m n2 = NoneN \/ (exists (v:node). sel_l m n2 = SomeN v)) with
+    (match sel_l m n1 with
+     | NoneN -> (match sel_l m n2 with | NoneN -> () | SomeN v -> ())
+     | SomeN v -> (match sel_l m n2 with | NoneN -> () | SomeN w -> ()))
+
+(* 3. a lemma called at the bound name *)
+assume val f : lmap -> node -> nat
+assume val f_zero : m:lmap -> n:node -> Lemma(ensures f m n = Z)
+
+val all_f_zero : m:lmap -> Lemma(ensures forall (n:node). f m n = Z)
+let all_f_zero m =
+  introduce forall (n:node). f m n = Z with
+    (let _ = f_zero m n in ())
+
+(* 4. a hint at the bound name *)
+type key =
+  | K : nat -> key
+assume val key_of : nat -> key
+assume val val_k : key -> nat
+assume val f2 : nat -> nat
+assume f2_def : forall (x:nat). f2 x = val_k (key_of x)
+assume val_k_zero : forall (y:key). val_k y = Z
+
+val f2_zero : u:nat -> Lemma(ensures forall (x:nat). f2 x = Z)
+let f2_zero u =
+  introduce forall (x:nat). f2 x = Z with
+    (let _ = instantiate!(key_of x) in ())
+
+(* 5. the goal is a quantified predicate: matching needs its unfolding *)
+let all_none_or_some (m:lmap) =
+  forall (n:node). sel_l m n = NoneN \/ (exists (v:node). sel_l m n = SomeN v)
+
+val exh_pred : m:lmap -> Lemma(ensures all_none_or_some m)
+let exh_pred m =
+  introduce forall (n:node). sel_l m n = NoneN \/ (exists (v:node). sel_l m n = SomeN v) with
+    (match sel_l m n with
+     | NoneN -> ()
+     | SomeN v -> ())
+
+(* 6. under an outer match, in each arm (the register_leader shape) *)
+val exh_under_match : m:lmap -> o:onode -> Lemma(ensures all_none_or_some m)
+let exh_under_match m o =
+  match o with
+  | NoneN ->
+    introduce forall (n:node). sel_l m n = NoneN \/ (exists (v:node). sel_l m n = SomeN v) with
+      (match sel_l m n with | NoneN -> () | SomeN v -> ())
+  | SomeN w ->
+    introduce forall (n:node). sel_l m n = NoneN \/ (exists (v:node). sel_l m n = SomeN v) with
+      (match sel_l m n with | NoneN -> () | SomeN v -> ())
+
+(* 7. one conjunct of a conjunction; the other is checked as before *)
+val exh_conj : m:lmap -> Lemma(ensures sel_l m N1 = sel_l m N1 /\ all_none_or_some m)
+let exh_conj m =
+  introduce forall (n:node). sel_l m n = NoneN \/ (exists (v:node). sel_l m n = SomeN v) with
+    (match sel_l m n with | NoneN -> () | SomeN v -> ())

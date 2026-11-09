@@ -1,0 +1,73 @@
+module ElimExists
+
+(* Item 52.7, `eliminate exists`: a name for the witness of an existential hypothesis
+   (a called lemma's `ensures`, a premise, or one conjunct of either), so a proof can
+   write a hint or call a lemma at it. `eliminate exists (x:t). phi with e` finds the
+   hypothesis alpha-equal to `exists x. phi`, binds x as a scope variable, replaces the
+   hypothesis by phi and checks `e`. Expected before the feature: a parse error. After:
+   every lemma verifies; each proof fails without the hint at the witness, since the
+   application the goal needs (`Vote x`) can only be named through x. The false goals are
+   tests/elim_exists_bad.cst, the non-matching formula tests/elim_exists_err.cst. *)
+
+type node =
+  | N1 : node
+  | N2 : node
+  | N3 : node
+
+type nlist =
+  | NNil : nlist
+  | NCons : node -> nlist -> nlist
+
+let rec nmem (x:node) (l:nlist) = match l with
+  | NNil -> false
+  | NCons y r -> if x = y then true else nmem x r
+
+type msg =
+  | Vote : node -> msg
+  | Leader : node -> msg
+
+type mlist =
+  | MNil : mlist
+  | MCons : msg -> mlist -> mlist
+
+let rec mem (m:msg) (l:mlist) = match l with
+  | MNil -> false
+  | MCons x r -> if m = x then true else mem m r
+
+(* every member of q voted, as a quantified predicate *)
+let all_voted (q:nlist) (msgs:mlist) = forall (x:node). nmem x q ==> mem (Vote x) msgs
+
+(* 1. the witness of a called lemma's ensures, hinted at *)
+assume val some_member : q:nlist -> Lemma(ensures exists (x:node). nmem x q)
+
+val a_vote : q:nlist -> msgs:mlist -> Lemma(ensures all_voted q msgs ==> (exists (m:msg). mem m msgs))
+let a_vote q msgs =
+  let _ = some_member q in
+  eliminate exists (x:node). nmem x q with
+    (let _ = instantiate!(Vote x) in ())
+
+(* 2. the witness of a premise *)
+val a_vote_req : q:nlist -> msgs:mlist ->
+  Lemma(ensures (exists (x:node). nmem x q) /\ all_voted q msgs ==> (exists (m:msg). mem m msgs))
+let a_vote_req q msgs =
+  eliminate exists (x:node). nmem x q with
+    (let _ = instantiate!(Vote x) in ())
+
+(* 3. the existential is one conjunct of the called lemma's ensures *)
+assume val member_and_more : q:nlist -> Lemma(ensures nmem N1 q /\ (exists (x:node). nmem x q /\ not (x = N1)))
+
+val a_vote_conj : q:nlist -> msgs:mlist -> Lemma(ensures all_voted q msgs ==> (exists (m:msg). mem m msgs /\ not (m = Vote N1)))
+let a_vote_conj q msgs =
+  let _ = member_and_more q in
+  eliminate exists (x:node). nmem x q /\ not (x = N1) with
+    (let _ = instantiate!(Vote x) in ())
+
+(* 4. two witnesses, two eliminations *)
+val two_votes : q1:nlist -> q2:nlist -> msgs:mlist ->
+  Lemma(ensures all_voted q1 msgs /\ all_voted q2 msgs ==> (exists (m1:msg) (m2:msg). mem m1 msgs /\ mem m2 msgs))
+let two_votes q1 q2 msgs =
+  let _ = some_member q1 in
+  let _ = some_member q2 in
+  eliminate exists (x:node). nmem x q1 with
+    (eliminate exists (y:node). nmem y q2 with
+       (let _ = instantiate!(Vote x) in let _ = instantiate!(Vote y) in ()))

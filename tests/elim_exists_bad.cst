@@ -1,0 +1,47 @@
+module ElimExistsBad
+
+(* Negative control for tests/elim_exists.cst: false goals under `eliminate exists`
+   must stay failed (saturated), never verified, unknown or fuel-exhausted. Not run by
+   strip_and_reprove.sh. *)
+
+type node =
+  | N1 : node
+  | N2 : node
+  | N3 : node
+
+type nlist =
+  | NNil : nlist
+  | NCons : node -> nlist -> nlist
+
+let rec nmem (x:node) (l:nlist) = match l with
+  | NNil -> false
+  | NCons y r -> if x = y then true else nmem x r
+
+type msg =
+  | Vote : node -> msg
+  | Leader : node -> msg
+
+type mlist =
+  | MNil : mlist
+  | MCons : msg -> mlist -> mlist
+
+let rec mem (m:msg) (l:mlist) = match l with
+  | MNil -> false
+  | MCons x r -> if m = x then true else mem m r
+
+let all_voted (q:nlist) (msgs:mlist) = forall (x:node). nmem x q ==> mem (Vote x) msgs
+
+assume val some_member : q:nlist -> Lemma(ensures exists (x:node). nmem x q)
+
+(* false: a member's vote is in msgs, a Leader message need not be *)
+val a_leader_bad : q:nlist -> msgs:mlist -> Lemma(ensures all_voted q msgs ==> (exists (n:node). mem (Leader n) msgs))
+let a_leader_bad q msgs =
+  let _ = some_member q in
+  eliminate exists (x:node). nmem x q with
+    (let _ = instantiate!(Vote x) in let _ = instantiate!(Leader x) in ())
+
+(* false: the witness is some member, not necessarily N1 *)
+val is_n1_bad : q:nlist -> Lemma(ensures nmem N1 q)
+let is_n1_bad q =
+  let _ = some_member q in
+  eliminate exists (x:node). nmem x q with ()

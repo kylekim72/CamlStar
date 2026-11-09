@@ -1,0 +1,27 @@
+module ElimExistsErr
+
+(* Error test for tests/elim_exists.cst: the formula of `eliminate exists` matches no
+   hypothesis (the called lemma says `nmem x q`, the formula says `nmem x NNil`).
+   Expected: the run stops with
+     check error: eliminate exists: no hypothesis matches …
+   and no VC is solved. Not run by strip_and_reprove.sh. *)
+
+type node =
+  | N1 : node
+  | N2 : node
+  | N3 : node
+
+type nlist =
+  | NNil : nlist
+  | NCons : node -> nlist -> nlist
+
+let rec nmem (x:node) (l:nlist) = match l with
+  | NNil -> false
+  | NCons y r -> if x = y then true else nmem x r
+
+assume val some_member : q:nlist -> Lemma(ensures exists (x:node). nmem x q)
+
+val wrong_hyp : q:nlist -> Lemma(ensures exists (x:node). nmem x q)
+let wrong_hyp q =
+  let _ = some_member q in
+  eliminate exists (x:node). nmem x NNil with ()

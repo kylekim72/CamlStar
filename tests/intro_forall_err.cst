@@ -1,0 +1,28 @@
+module IntroForallErr
+
+(* Error test for tests/intro_forall.cst: the formula of `introduce forall` matches no
+   conjunct of the goal (the goal binds one node, the formula says `= SomeN n`, which
+   the goal does not). Expected: the run stops with
+     check error: introduce forall: no conjunct of the goal matches …
+   and no VC is solved. Not run by strip_and_reprove.sh. *)
+
+type node =
+  | N1 : node
+  | N2 : node
+  | N3 : node
+
+type onode =
+  | NoneN : onode
+  | SomeN : node -> onode
+
+type lmap =
+  | LNil : lmap
+  | LCons : node -> onode -> lmap -> lmap
+
+let rec sel_l (m:lmap) (k:node) = match m with
+  | LNil -> NoneN
+  | LCons k' v r -> if k = k' then v else sel_l r k
+
+val wrong_formula : m:lmap -> Lemma(ensures forall (n:node). sel_l m n = NoneN \/ (exists (v:node). sel_l m n = SomeN v))
+let wrong_formula m =
+  introduce forall (n:node). sel_l m n = NoneN \/ sel_l m n = SomeN n with ()

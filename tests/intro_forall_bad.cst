@@ -1,0 +1,38 @@
+module IntroForallBad
+
+(* Negative control for tests/intro_forall.cst: false goals under `introduce forall`
+   must stay failed (saturated), never verified, unknown or fuel-exhausted. Not run by
+   strip_and_reprove.sh. *)
+
+type node =
+  | N1 : node
+  | N2 : node
+  | N3 : node
+
+type onode =
+  | NoneN : onode
+  | SomeN : node -> onode
+
+type lmap =
+  | LNil : lmap
+  | LCons : node -> onode -> lmap -> lmap
+
+let rec sel_l (m:lmap) (k:node) = match m with
+  | LNil -> NoneN
+  | LCons k' v r -> if k = k' then v else sel_l r k
+
+(* false: a map need not be empty *)
+val all_none_bad : m:lmap -> Lemma(ensures forall (n:node). sel_l m n = NoneN)
+let all_none_bad m =
+  introduce forall (n:node). sel_l m n = NoneN with ()
+
+(* false even with the split: the SomeN arm does not give NoneN *)
+val all_none_split_bad : m:lmap -> Lemma(ensures forall (n:node). sel_l m n = NoneN)
+let all_none_split_bad m =
+  introduce forall (n:node). sel_l m n = NoneN with
+    (match sel_l m n with | NoneN -> () | SomeN v -> ())
+
+(* false: two binders, the values need not agree *)
+val same_bad : m:lmap -> Lemma(ensures forall (n1:node) (n2:node). sel_l m n1 = sel_l m n2)
+let same_bad m =
+  introduce forall (n1:node) (n2:node). sel_l m n1 = sel_l m n2 with ()
