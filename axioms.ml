@@ -183,7 +183,9 @@ let rec term_exists (p : term -> bool) (t : term) : bool =
            || (match br.br_when with Some w -> term_exists p w | None -> false)) brs
   | Tm_ascribed (e, _) -> term_exists p e
   | Tm_quant { qbody; _ } -> term_exists p qbody
-  | Tm_qproof { pphi; pbody; _ } -> term_exists p pphi || term_exists p pbody
+  (* a proof step's formula names a conjunct of the goal or a hypothesis; it is not
+     computed by the body, so only the proof body counts *)
+  | Tm_qproof { pbody; _ } -> term_exists p pbody
 
 (* the body, after its parameters, is a formula: connectives and quantifiers over atoms,
    with applications of [qdefs] only as atoms — never under a match, let or if, and never

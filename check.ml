@@ -137,6 +137,9 @@ let close_type (delta : env) (t : typ) : typ =
 let genv : (string, tscheme) Hashtbl.t = Hashtbl.create 64
 let ind_tbl : (string, data_con list) Hashtbl.t = Hashtbl.create 16
 let module_axioms : term list ref = ref []
+(* the module being checked: a proof step unfolds the quantified predicates of a goal or
+   a hypothesis (Inline.expand) before matching its formula against them *)
+let cur_module : modul option ref = ref None
 
 let cur_range : range ref = ref dummy_range
 let cur_reason : string ref = ref "subtyping"
@@ -183,6 +186,48 @@ let merge_binds (a : (tyvar * typ) list) (b : (tyvar * typ) list) : (tyvar * typ
     a b
 
 (* ===== the checker ===== *)
+
+(* ===== introduce forall ===== *)
+
+let unfold_quantified (t : term) : term =
+  match !cur_module with Some m -> Inline.expand m t | None -> t
+
+(* The universal quantifiers of a formula in positive position: the formula itself, a
+   side of /\ or \/, the consequent of ==>. A quantifier there can be moved to the top
+   (forall-introduction) without changing the formula's meaning, as long as its variable
+   is fresh; one under a negation or a premise cannot. *)
+let rec positive_foralls (t : term) : term list =
+  match head_spine t [] with
+  | Tm_quant { qk = Forall; _ }, [] -> [ t ]
+  | Tm_fvar l, [ a; b ] when lid_eq l and_lid || lid_eq l or_lid ->
+    positive_foralls a @ positive_foralls b
+  | Tm_fvar l, [ _; q ] when lid_eq l imp_lid -> positive_foralls q
+  | _ -> []
+
+(* Replace, in [goal], the first universal quantifier in positive position whose body,
+   with its variable renamed to [x], is alpha-equal to [phi], by that body: [x] becomes
+   a free variable of the goal, to be bound in the VC's scope. Returns the new goal and
+   the quantifier's sort; [None] when no quantifier matches. *)
+let introduce_forall (x : var) (phi : term) (goal : term) : (term * base_typ option) option =
+  let rec go t =
+    match head_spine t [] with
+    | Tm_quant { qk = Forall; qv; qty; qbody }, [] ->
+      let body = Subst.subst_term [ (qv, Tm_var x) ] qbody in
+      if Subst.alpha_equal_term phi body then Some (body, Option.bind qty base_of_typ)
+      else None
+    | Tm_fvar l, [ a; b ] when lid_eq l and_lid ->
+      (match go a with
+       | Some (a', s) -> Some (mk_and a' b, s)
+       | None -> Option.map (fun (b', s) -> (mk_and a b', s)) (go b))
+    | Tm_fvar l, [ a; b ] when lid_eq l or_lid ->
+      (match go a with
+       | Some (a', s) -> Some (mk_or a' b, s)
+       | None -> Option.map (fun (b', s) -> (mk_or a b', s)) (go b))
+    | Tm_fvar l, [ p; q ] when lid_eq l imp_lid ->
+      Option.map (fun (q', s) -> (mk_imp p q', s)) (go q)
+    | _ -> None
+  in
+  go goal
 
 let rec subtype (env : env) (s : typ) (t : typ) : Vc.t list =
   match s, t with
@@ -323,6 +368,34 @@ and check (env : env) (e : term) (t : typ) : Vc.t list =
     let ts, v0 = synth env scrut in
     let brs = Exhaust.expand (ctors_of_typ ts) scrut brs in
     v0 @ List.concat_map (check_branch env scrut ts t) brs
+  | Tm_qproof { pk = Forall; pv; pty; pphi; pbody }, T_refine rt ->
+    (* introduce forall pv. pphi with pbody: the goal is the refinement; the universal
+       conjunct that is `forall pv. pphi` (after unfolding the quantified predicates)
+       loses its quantifier, pv becomes a variable of the VC, and pbody proves the goal
+       with that conjunct's body in its place; the other conjuncts are checked as before *)
+    let goal = unfold_quantified rt.rphi in
+    (match introduce_forall pv pphi goal with
+     | Some (goal', sort) ->
+       let sort =
+         match sort with
+         | Some b -> b
+         | None ->
+           (match Option.bind pty base_of_typ with
+            | Some b -> b
+            | None ->
+              raise (Check_error
+                       (Printf.sprintf "introduce forall: no sort for %s" pv.vname)))
+       in
+       check (B_typed (pv, mk_base sort) :: env) pbody (T_refine { rt with rphi = goal' })
+     | None ->
+       raise (Check_error
+                (Printf.sprintf
+                   "introduce forall: no conjunct of the goal is `forall %s. %s`; the \
+                    goal's universal conjuncts are: %s"
+                   pv.vname (string_of_term pphi)
+                   (match positive_foralls goal with
+                    | [] -> "(none)"
+                    | qs -> String.concat " ; " (List.map string_of_term qs)))))
   | _ ->
     let s, v = synth env e in
     v @ subtype env s t
@@ -424,6 +497,7 @@ let check_module (m : modul) : Vc.t list =
   Hashtbl.reset genv;
   Hashtbl.reset ind_tbl;
   module_axioms := [];
+  cur_module := Some m;
   (* pass 1: populate the global signature and collect axioms *)
   List.iter
     (fun se ->

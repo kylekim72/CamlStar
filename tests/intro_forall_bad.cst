@@ -1,8 +1,9 @@
 module IntroForallBad
 
 (* Negative control for tests/intro_forall.cst: false goals under `introduce forall`
-   must stay failed (saturated), never verified, unknown or fuel-exhausted. Not run by
-   strip_and_reprove.sh. *)
+   must stay failed (saturated), never unknown or fuel-exhausted. Expected: 1 verified
+   (the NoneN arm of `all_none_split_bad`, which is true in that arm), 3 failed, one per
+   lemma. Not run by strip_and_reprove.sh. *)
 
 type node =
   | N1 : node
