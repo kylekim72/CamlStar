@@ -14,6 +14,7 @@ let () =
       "val", VAL; "assume", ASSUME; "type", TYPE; "match", MATCH; "with", WITH;
       "fun", FUN; "if", IF; "then", THEN; "else", ELSE;
       "forall", FORALL; "exists", EXISTS; "requires", REQUIRES; "ensures", ENSURES;
+      "introduce", INTRODUCE; "eliminate", ELIMINATE;
       "assert", ASSERT; "true", TRUE; "false", FALSE;
       "Lemma", LEMMA;
       "private", PRIVATE; "irreducible", IRREDUCIBLE; "unfold", UNFOLD;

@@ -52,9 +52,11 @@ and term =
   | Tm_match    of term * branch list
   | Tm_ascribed of term * typ
   | Tm_quant    of quant
+  | Tm_qproof   of qproof
 
 and abs   = { xbinder : var; xtyp : typ option; xbody : term }
 and quant = { qk : quantifier; qv : var; qty : typ option; qbody : term }
+and qproof = { pk : quantifier; pv : var; pty : typ option; pphi : term; pbody : term }
 
 and letbindings = { lb_rec : bool; lbs : letbinding list }
 and letbinding  = { lb_name : var; lb_scheme : tscheme option; lb_def : term;
@@ -242,6 +244,14 @@ and string_of_term (t : term) : string =
     in
     Printf.sprintf "%s %s. %s"
       (string_of_quant qk) binder (string_of_term qbody)
+  | Tm_qproof { pk; pv; pty; pphi; pbody } ->
+    let binder = match pty with
+      | Some ty -> Printf.sprintf "(%s:%s)" pv.vname (string_of_typ ty)
+      | None    -> pv.vname
+    in
+    Printf.sprintf "%s %s %s. %s with %s"
+      (match pk with Forall -> "introduce" | Exists -> "eliminate")
+      (string_of_quant pk) binder (string_of_term pphi) (string_of_term_atom pbody)
 
 (* A term used as an argument/operand, parenthesized when it is compound. *)
 and string_of_term_atom (t : term) : string =

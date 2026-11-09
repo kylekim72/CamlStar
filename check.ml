@@ -245,6 +245,8 @@ and synth (env : env) (e : term) : typ * Vc.t list =
     let rphi = match disjuncts with [] -> mk_true | h :: r -> List.fold_left mk_or h r in
     (T_refine { rv = v; rbase; rphi }, vcs)
   | Tm_quant _ -> (t_bool, [])            (* a proposition *)
+  | Tm_qproof _ ->
+    raise (Check_error "introduce forall / eliminate exists is a proof step, not a value")
   | Tm_abs _ -> raise (Check_error "cannot synthesize a function; annotation required")
 
 and synth_app (env : env) (head : term) (args : term list) (whole : term) : typ * Vc.t list =

@@ -54,12 +54,12 @@ let a_vote_req q msgs =
     (let _ = instantiate!(Vote x) in ())
 
 (* 3. the existential is one conjunct of the called lemma's ensures *)
-assume val member_and_more : q:nlist -> Lemma(ensures nmem N1 q /\ (exists (x:node). nmem x q /\ not (x = N1)))
+assume val member_and_more : q:nlist -> Lemma(ensures nmem N1 q /\ (exists (x:node). nmem x q /\ ~(x = N1)))
 
-val a_vote_conj : q:nlist -> msgs:mlist -> Lemma(ensures all_voted q msgs ==> (exists (m:msg). mem m msgs /\ not (m = Vote N1)))
+val a_vote_conj : q:nlist -> msgs:mlist -> Lemma(ensures all_voted q msgs ==> (exists (m:msg). mem m msgs /\ ~(m = Vote N1)))
 let a_vote_conj q msgs =
   let _ = member_and_more q in
-  eliminate exists (x:node). nmem x q /\ not (x = N1) with
+  eliminate exists (x:node). nmem x q /\ ~(x = N1) with
     (let _ = instantiate!(Vote x) in ())
 
 (* 4. two witnesses, two eliminations *)

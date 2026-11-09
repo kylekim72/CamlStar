@@ -28,6 +28,11 @@ let rec tm_term (s : tsub) (t : term) : term =
     let v' = fresh_var qv.vname in
     let s' = (qv.vid, Tm_var v') :: s in
     Tm_quant { qk; qv = v'; qty = Option.map (tm_typ s) qty; qbody = tm_term s' qbody }
+  | Tm_qproof { pk; pv; pty; pphi; pbody } ->
+    let v' = fresh_var pv.vname in
+    let s' = (pv.vid, Tm_var v') :: s in
+    Tm_qproof { pk; pv = v'; pty = Option.map (tm_typ s) pty;
+                pphi = tm_term s' pphi; pbody = tm_term s' pbody }
 
 and tm_typ (s : tsub) (t : typ) : typ =
   match t with
@@ -154,6 +159,9 @@ and ty_term (s : tysub) (t : term) : term =
         brs)
   | Tm_ascribed (e, ty) -> Tm_ascribed (ty_term s e, ty_typ s ty)
   | Tm_quant q -> Tm_quant { q with qty = Option.map (ty_typ s) q.qty; qbody = ty_term s q.qbody }
+  | Tm_qproof p ->
+    Tm_qproof { p with pty = Option.map (ty_typ s) p.pty;
+                       pphi = ty_term s p.pphi; pbody = ty_term s p.pbody }
 
 and ty_scheme (s : tysub) (sch : tscheme) : tscheme =
   (* the scheme's own bound tyvars shadow the substitution *)
@@ -199,6 +207,9 @@ let rec fv_term (bound : int list) (acc : var list) (t : term) : var list =
   | Tm_quant { qv; qty; qbody; _ } ->
     let acc = match qty with Some ty -> fv_typ bound acc ty | None -> acc in
     fv_term (qv.vid :: bound) acc qbody
+  | Tm_qproof { pv; pty; pphi; pbody; _ } ->
+    let acc = match pty with Some ty -> fv_typ bound acc ty | None -> acc in
+    fv_term (pv.vid :: bound) (fv_term (pv.vid :: bound) acc pphi) pbody
 
 and fv_typ (bound : int list) (acc : var list) (t : typ) : var list =
   match t with
@@ -267,6 +278,9 @@ and ftv_term (bound : int list) (acc : tyvar list) (t : term) : tyvar list =
   | Tm_quant q ->
     let acc = match q.qty with Some ty -> ftv_typ bound acc ty | None -> acc in
     ftv_term bound acc q.qbody
+  | Tm_qproof p ->
+    let acc = match p.pty with Some ty -> ftv_typ bound acc ty | None -> acc in
+    ftv_term bound (ftv_term bound acc p.pphi) p.pbody
 
 let dedup_tyvars (vs : tyvar list) : tyvar list =
   let seen = Hashtbl.create 16 in
@@ -297,6 +311,10 @@ let rec ae_term (m : (int * int) list) (a : term) (b : term) : bool =
   | Tm_quant q1, Tm_quant q2 ->
     q1.qk = q2.qk && ae_opt_typ m q1.qty q2.qty
     && ae_term ((q1.qv.vid, q2.qv.vid) :: m) q1.qbody q2.qbody
+  | Tm_qproof p1, Tm_qproof p2 ->
+    p1.pk = p2.pk && ae_opt_typ m p1.pty p2.pty
+    && ae_term ((p1.pv.vid, p2.pv.vid) :: m) p1.pphi p2.pphi
+    && ae_term ((p1.pv.vid, p2.pv.vid) :: m) p1.pbody p2.pbody
   | _ -> false
 
 and ae_typ (m : (int * int) list) (a : typ) (b : typ) : bool =

@@ -183,6 +183,7 @@ let rec term_exists (p : term -> bool) (t : term) : bool =
            || (match br.br_when with Some w -> term_exists p w | None -> false)) brs
   | Tm_ascribed (e, _) -> term_exists p e
   | Tm_quant { qbody; _ } -> term_exists p qbody
+  | Tm_qproof { pphi; pbody; _ } -> term_exists p pphi || term_exists p pbody
 
 (* the body, after its parameters, is a formula: connectives and quantifiers over atoms,
    with applications of [qdefs] only as atoms — never under a match, let or if, and never
@@ -202,7 +203,7 @@ let formula_shaped (qdefs : string list) (body : term) : bool =
        | Tm_fvar l, args when Smtlib.is_connective l.bname -> List.for_all ok args
        | Tm_fvar l, args when List.mem l.bname qdefs -> not (List.exists applies_qdef args)
        | _, args -> not (List.exists applies_qdef args))
-    | Tm_abs _ | Tm_let _ | Tm_match _ | Tm_ascribed _ -> false
+    | Tm_abs _ | Tm_let _ | Tm_match _ | Tm_ascribed _ | Tm_qproof _ -> false
   in
   ok (strip body)
 

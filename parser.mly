@@ -72,6 +72,17 @@ let rec build_quant qk binders body sc =
     let (v, tyo, sc') = b sc in
     Tm_quant { qk; qv = v; qty = tyo; qbody = build_quant qk rest body sc' }
 
+(* `introduce forall x y. phi with e` nests one step per binder: the step for x has the
+   formula `forall y. phi` (the goal's conjunct it selects) and, as its proof, the step
+   for y with the formula `phi`; likewise `eliminate exists`. *)
+let rec build_qproof pk binders phi body sc =
+  match binders with
+  | [] -> body sc
+  | b :: rest ->
+    let (v, tyo, sc') = b sc in
+    Tm_qproof { pk; pv = v; pty = tyo; pphi = build_quant pk rest phi sc';
+                pbody = build_qproof pk rest phi body sc' }
+
 (* The equation generator (axioms.ml) reads a match only on a *variable*. Bind any other
    scrutinee or guard to a fresh variable first, as the hand-written sources do with
    `let p = g in if p`; inference gives the let its scheme like a user-written one. *)
@@ -203,6 +214,7 @@ let build_lets is_rec (lbs : lb_syntax list) outer =
 
 %token MODULE LET REC AND IN VAL ASSUME TYPE MATCH WITH FUN IF THEN ELSE
 %token FORALL EXISTS REQUIRES ENSURES ASSERT WHEN TRUE FALSE LEMMA INSTANTIATE
+%token INTRODUCE ELIMINATE
 %token PRIVATE IRREDUCIBLE UNFOLD NOEQ LOGIC
 
 %token LPAREN RPAREN LBRACE RBRACE LBRACK RBRACK LBRACK_AT_AT
@@ -394,6 +406,10 @@ term:
       { fun sc -> build_quant Forall bs e sc }
   | EXISTS bs=nonempty_list(binder) DOT e=term
       { fun sc -> build_quant Exists bs e sc }
+  | INTRODUCE FORALL bs=nonempty_list(binder) DOT phi=term WITH e=term
+      { fun sc -> build_qproof Forall bs phi e sc }
+  | ELIMINATE EXISTS bs=nonempty_list(binder) DOT phi=term WITH e=term
+      { fun sc -> build_qproof Exists bs phi e sc }
   | ASSERT e=term
       { fun sc -> mk_app (Tm_fvar assert_lid) [e sc] }
   | ASSUME e=term

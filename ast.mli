@@ -61,11 +61,22 @@ and term =
   | Tm_match    of term * branch list
   | Tm_ascribed of term * typ          (* (e <: T) *)
   | Tm_quant    of quant               (* forall/exists (x:T). phi *)
+  | Tm_qproof   of qproof              (* introduce forall (x:T). phi with e
+                                          / eliminate exists (x:T). phi with e *)
 
 and abs   = { xbinder : var; xtyp : typ option; xbody : term }
                                                 (* xtyp = None when the binder's type is left to inference *)
 and quant = { qk : quantifier; qv : var; qty : typ option; qbody : term }
                                                 (* qty = None when the bound variable's type is left to inference *)
+and qproof = { pk : quantifier; pv : var; pty : typ option; pphi : term; pbody : term }
+                                                (* a proof step: Forall = introduce (pv is a
+                                                   variable of the goal's conjunct `forall pv.
+                                                   pphi`), Exists = eliminate (pv is the
+                                                   witness of the hypothesis `exists pv.
+                                                   pphi`); pv is bound in pphi and pbody.
+                                                   Several binders nest: `introduce forall x y.
+                                                   phi with e` is introduce x (forall y. phi)
+                                                   (introduce y phi e). *)
 
 and letbindings = { lb_rec : bool; lbs : letbinding list }   (* rec + mutual `and` group *)
 and letbinding  = { lb_name : var; lb_scheme : tscheme option; lb_def : term;

@@ -12,6 +12,7 @@ let rec nnf (neg : bool) (t : term) : term =
   | Tm_quant { qk; qv; qty; qbody } ->
     let qk' = if neg then (match qk with Forall -> Exists | Exists -> Forall) else qk in
     Tm_quant { qk = qk'; qv; qty; qbody = nnf neg qbody }
+  | Tm_qproof _ -> failwith "nnf: a proof step (introduce/eliminate) reached a formula"
   | Tm_ascribed (e, _) -> nnf neg e
   | Tm_app _ ->
     let head, args = spine t [] in

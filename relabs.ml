@@ -44,6 +44,7 @@ let rec relabs (ret_sort : string -> base_typ) (is_pos : bool) (t : term) : term
        relabs ret_sort is_pos (Subst.subst_term [ (x, bound) ] body))
   | Tm_let _ -> failwith "relabs: expected an ANF single-binding let"
   | Tm_quant q -> Tm_quant { q with qbody = relabs ret_sort is_pos q.qbody }
+  | Tm_qproof _ -> failwith "relabs: a proof step (introduce/eliminate) reached a formula"
   | Tm_ascribed (e, _) -> relabs ret_sort is_pos e
   | Tm_app _ ->
     let head, args = spine t [] in

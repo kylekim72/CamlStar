@@ -63,6 +63,7 @@ and atomise (is_pred : string -> bool) (args : term list) : term list * (var * t
 let rec form (is_pred : string -> bool) (t : term) : term =
   match t with
   | Tm_quant q -> Tm_quant { q with qbody = form is_pred q.qbody }
+  | Tm_qproof _ -> failwith "anf: a proof step (introduce/eliminate) reached a formula"
   | Tm_ascribed (e, _) -> form is_pred e
   | Tm_app _ ->
     let head, args = spine t [] in

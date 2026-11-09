@@ -170,6 +170,7 @@ let rec go (naming : naming) (t : term) : string =
     in
     let q = match qk with Forall -> "forall" | Exists -> "exists" in
     Printf.sprintf "(%s ((%s %s)) %s)" q (smt_var naming qv) sort (go naming qbody)
+  | Tm_qproof _ -> failwith "smtlib: a proof step (introduce/eliminate) reached the encoding"
   | Tm_ascribed (e, _) -> go naming e
   | Tm_abs _ -> failwith "smtlib: unexpected lambda in formula"
   | Tm_let _ -> failwith "smtlib: unexpected let in formula (should be relabs'd away)"

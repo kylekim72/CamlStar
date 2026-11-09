@@ -62,6 +62,10 @@ let rec pass (tbl : (string * def) list) (t : term) : term * bool =
        (mk_app head' args', c || any cs))
   | Tm_abs a -> let b, c = pass tbl a.xbody in (Tm_abs { a with xbody = b }, c)
   | Tm_quant q -> let b, c = pass tbl q.qbody in (Tm_quant { q with qbody = b }, c)
+  | Tm_qproof p ->
+    let phi, c1 = pass tbl p.pphi in
+    let body, c2 = pass tbl p.pbody in
+    (Tm_qproof { p with pphi = phi; pbody = body }, c1 || c2)
   | Tm_let (lbs, body) ->
     let lbs', cs =
       List.split
@@ -96,6 +100,8 @@ let rec first_name (tbl : (string * def) list) (t : term) : string option =
   | Tm_app (f, a) -> (match first_name tbl f with Some n -> Some n | None -> first_name tbl a)
   | Tm_abs a -> first_name tbl a.xbody
   | Tm_quant q -> first_name tbl q.qbody
+  | Tm_qproof p ->
+    (match first_name tbl p.pphi with Some n -> Some n | None -> first_name tbl p.pbody)
   | Tm_let (lbs, body) ->
     List.fold_left
       (fun acc lb -> match acc with Some _ -> acc | None -> first_name tbl lb.lb_def)

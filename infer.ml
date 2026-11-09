@@ -145,6 +145,15 @@ let rec infer_term (lenv : (int * ischeme) list) (t : Ast.term) : ityp =
     let tb = infer_term ((qv.Ast.vid, { bound = []; body = dom }) :: lenv) qbody in
     unify_expect tb I_bool "quantifier body must be a proposition";
     I_bool
+  | Ast.Tm_qproof { pv; pty; pphi; pbody; _ } ->
+    (* the bound variable is in scope in the formula and in the proof body; the formula
+       is a proposition, the proof body is the type of the proof (unit) *)
+    let dom = match pty with Some ty -> erase ty | None -> fresh_meta () in
+    Hashtbl.replace binder_typ pv.Ast.vid dom;
+    let lenv' = (pv.Ast.vid, { bound = []; body = dom }) :: lenv in
+    let tphi = infer_term lenv' pphi in
+    unify_expect tphi I_bool "introduce/eliminate: the formula must be a proposition";
+    infer_term lenv' pbody
 
 and infer_letbindings (lenv : (int * ischeme) list) (lbs : Ast.letbindings)
   : (int * ischeme) list =
@@ -273,6 +282,14 @@ let rec fill_term (t : Ast.term) : Ast.term =
          | Some ity -> Some (reflect ity) | None -> None)
     in
     Ast.Tm_quant { q with qty; qbody = fill_term q.Ast.qbody }
+  | Ast.Tm_qproof p ->
+    let pty = match p.Ast.pty with
+      | Some _ as s -> s
+      | None ->
+        (match Hashtbl.find_opt binder_typ p.Ast.pv.Ast.vid with
+         | Some ity -> Some (reflect ity) | None -> None)
+    in
+    Ast.Tm_qproof { p with pty; pphi = fill_term p.Ast.pphi; pbody = fill_term p.Ast.pbody }
 
 and fill_letbindings (lbs : Ast.letbindings) : Ast.letbindings =
   { lbs with Ast.lbs =
