@@ -229,6 +229,40 @@ let introduce_forall (x : var) (phi : term) (goal : term) : (term * base_typ opt
   in
   go goal
 
+(* ===== eliminate exists ===== *)
+
+(* the existential quantifiers of a hypothesis in positive position (a side of /\ or \/,
+   the consequent of ==>): each is a witness the query Skolemizes, which the step names *)
+let rec positive_exists (t : term) : term list =
+  match head_spine t [] with
+  | Tm_quant { qk = Exists; _ }, [] -> [ t ]
+  | Tm_fvar l, [ a; b ] when lid_eq l and_lid || lid_eq l or_lid ->
+    positive_exists a @ positive_exists b
+  | Tm_fvar l, [ _; q ] when lid_eq l imp_lid -> positive_exists q
+  | _ -> []
+
+(* the premises of a goal `P1 ==> P2 ==> … ==> Q`: hypotheses the solver assumes *)
+let rec premises (goal : term) : term list =
+  match head_spine goal [] with
+  | Tm_fvar l, [ p; q ] when lid_eq l imp_lid -> p :: premises q
+  | _ -> []
+
+(* The body of the first existential in positive position of [h] whose body, with its
+   variable renamed to [x], is alpha-equal to [phi], and the quantifier's sort. *)
+let eliminate_exists_in (x : var) (phi : term) (h : term) : (term * base_typ option) option =
+  let rec go t =
+    match head_spine t [] with
+    | Tm_quant { qk = Exists; qv; qty; qbody }, [] ->
+      let body = Subst.subst_term [ (qv, Tm_var x) ] qbody in
+      if Subst.alpha_equal_term phi body then Some (body, Option.bind qty base_of_typ)
+      else None
+    | Tm_fvar l, [ a; b ] when lid_eq l and_lid || lid_eq l or_lid ->
+      (match go a with Some r -> Some r | None -> go b)
+    | Tm_fvar l, [ _; q ] when lid_eq l imp_lid -> go q
+    | _ -> None
+  in
+  go h
+
 let rec subtype (env : env) (s : typ) (t : typ) : Vc.t list =
   match s, t with
   | T_refine rs, T_refine rt ->
@@ -394,6 +428,39 @@ and check (env : env) (e : term) (t : typ) : Vc.t list =
                     goal's universal conjuncts are: %s"
                    pv.vname (string_of_term pphi)
                    (match positive_foralls goal with
+                    | [] -> "(none)"
+                    | qs -> String.concat " ; " (List.map string_of_term qs)))))
+  | Tm_qproof { pk = Exists; pv; pty; pphi; pbody }, T_refine rt ->
+    (* eliminate exists pv. pphi with pbody: the hypotheses, innermost first, then the
+       goal's premises, are searched for an existential `exists pv. pphi` (after
+       unfolding the quantified predicates); its witness gets the name pv, a variable of
+       the VC, and its body becomes a hypothesis; pbody proves the unchanged goal. The
+       existential itself stays where it was: adding the named witness is sound for a
+       hypothesis (its Skolemization) and for a premise of the goal (a universal of the
+       goal), and leaves every binding's type as it is. *)
+    let _, hyps = to_scope_hyps env in
+    let candidates =
+      List.map unfold_quantified (List.rev hyps @ premises (unfold_quantified rt.rphi)) in
+    (match List.find_map (eliminate_exists_in pv pphi) candidates with
+     | Some (body, sort) ->
+       let sort =
+         match sort with
+         | Some b -> b
+         | None ->
+           (match Option.bind pty base_of_typ with
+            | Some b -> b
+            | None ->
+              raise (Check_error
+                       (Printf.sprintf "eliminate exists: no sort for %s" pv.vname)))
+       in
+       check (B_hyp body :: B_typed (pv, mk_base sort) :: env) pbody t
+     | None ->
+       raise (Check_error
+                (Printf.sprintf
+                   "eliminate exists: no hypothesis is `exists %s. %s`; the existential \
+                    hypotheses are: %s"
+                   pv.vname (string_of_term pphi)
+                   (match List.concat_map positive_exists candidates with
                     | [] -> "(none)"
                     | qs -> String.concat " ; " (List.map string_of_term qs)))))
   | _ ->
