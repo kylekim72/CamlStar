@@ -7,7 +7,8 @@ module ElimExists
    hypothesis by phi and checks `e`. Expected before the feature: a parse error. After:
    every lemma verifies; each proof fails without the hint at the witness, since the
    application the goal needs (`Vote x`) can only be named through x. The false goals are
-   tests/elim_exists_bad.cst, the non-matching formula tests/elim_exists_err.cst. *)
+   tests/elim_exists_bad.cst, the non-matching formula tests/elim_exists_err.cst. Not run
+   by strip_and_reprove.sh: the hints at the witness are the point of the test. *)
 
 type node =
   | N1 : node

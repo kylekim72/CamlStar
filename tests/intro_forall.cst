@@ -7,7 +7,9 @@ module IntroForall
    conjuncts are checked as before. Expected before the feature: a parse error. After:
    every lemma verifies; each proof fails without its `introduce` body (the split, the
    call or the hint is what closes it). The false goals are tests/intro_forall_bad.cst,
-   the non-matching formula tests/intro_forall_err.cst. *)
+   the non-matching formula tests/intro_forall_err.cst. Not run by strip_and_reprove.sh:
+   the hint at a bound name (f2_zero) is the point of the test, not something CEGQI
+   re-derives here. *)
 
 type node =
   | N1 : node
