@@ -21,6 +21,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 pass=0; fail=0
 for f in tests/prop*.cst tests/nested_if.cst tests/quant_def.cst tests/quant_inst.cst \
+         tests/abstract_sort.cst \
          tests/hof_map.cst tests/hof_capture.cst tests/hof_uninterp.cst tests/hof_local.cst \
          tests/hof_spec.cst tests/assumed_lemma.cst \
          .claude/skills/caml-star-instantiate/Examples/prop*.cst; do
