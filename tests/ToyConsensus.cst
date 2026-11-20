@@ -1,0 +1,80 @@
+module ToyConsensus
+
+(* The toy consensus protocol of Tamir et al. (OOPSLA 2023, Figures 3, 4 and 6), with the
+   state as an explicit argument:
+
+     vote      : state -> node -> value      the vote of a node in a state
+     decision  : state -> value -> bool      the value is decided in the state
+     member    : node -> quorum -> bool      the node belongs to the quorum
+     cast_vote : node -> value -> state -> state
+     decide    : value -> state -> state
+
+   The actions are declared, not defined: what they do is given by axioms, one per line
+   of the paper's actions. The three preservation lemmas have empty proofs, to show which
+   obligations the verifier discharges by itself. A lemma's precondition is written as
+   the premise of its `ensures`. *)
+
+type node
+type value
+type quorum
+type state
+
+assume val none : value
+assume val init : state
+
+assume val vote : state -> node -> value
+assume val decision : state -> value -> bool
+assume val member : node -> quorum -> bool
+
+assume val cast_vote : node -> value -> state -> state
+assume val decide : value -> state -> state
+
+(* any two quorums share a node *)
+axiom axm_intersection : q1:quorum -> q2:quorum
+  -> Lemma (ensures exists (n:node). member n q1 /\ member n q2)
+
+(* initial state: nobody has voted, nothing is decided *)
+axiom init_vote : n:node -> Lemma (ensures vote init n = none)
+axiom init_decision : v:value -> Lemma (ensures decision init v = false)
+
+(* cast_vote n v s, when n has not voted and v is a real value *)
+axiom cast_self : n:node -> v:value -> s:state
+  -> Lemma (requires vote s n = none /\ ~(v = none))
+           (ensures vote (cast_vote n v s) n = v)
+axiom cast_other : n:node -> v:value -> s:state -> m:node
+  -> Lemma (requires vote s n = none /\ ~(v = none) /\ ~(m = n))
+           (ensures vote (cast_vote n v s) m = vote s m)
+axiom cast_decision : n:node -> v:value -> s:state -> u:value
+  -> Lemma (requires vote s n = none /\ ~(v = none))
+           (ensures decision (cast_vote n v s) u = decision s u)
+
+(* decide v s *)
+axiom decide_self : v:value -> s:state
+  -> Lemma (ensures decision (decide v s) v = true)
+axiom decide_other : v:value -> s:state -> u:value
+  -> Lemma (requires ~(u = v))
+           (ensures decision (decide v s) u = decision s u)
+axiom decide_vote : v:value -> s:state -> m:node
+  -> Lemma (ensures vote (decide v s) m = vote s m)
+
+(* Safety, NullValue, QuorumSupport *)
+let inv s =
+  (forall (v1:value) (v2:value). decision s v1 /\ decision s v2 ==> v1 = v2)
+  /\ (decision s none = false)
+  /\ (forall (v:value). exists (q:quorum). forall (n:node).
+        (decision s v /\ member n q) ==> vote s n = v)
+
+val inv_init : u:unit -> Lemma (ensures inv init)
+let inv_init u = ()
+
+val inv_cast : n0:node -> v0:value -> s:state
+  -> Lemma (ensures (inv s /\ vote s n0 = none /\ ~(v0 = none))
+                      ==> inv (cast_vote n0 v0 s))
+let inv_cast n0 v0 s = ()
+
+(* decide's guard: v0 is a real value, and every node of some quorum q0 voted v0 *)
+val inv_decide : v0:value -> q0:quorum -> s:state
+  -> Lemma (ensures (inv s /\ ~(v0 = none)
+                       /\ (forall (n:node). member n q0 ==> vote s n = v0))
+                      ==> inv (decide v0 s))
+let inv_decide v0 q0 s = ()
