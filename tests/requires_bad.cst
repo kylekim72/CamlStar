@@ -1,0 +1,21 @@
+module RequiresBad
+
+(* Negative control for tests/requires.cst: calling a `requires` lemma at an instance
+   where the premise is false must produce a failing VC for the call (the argument's
+   subtyping obligation), not a vacuous success. Expected: 1 failed VC in `bad_use`,
+   located at the call; `req_form` itself verifies. Not run by strip_and_reprove.sh. *)
+
+type nat =
+  | Z : nat
+  | S : nat -> nat
+
+let rec add (x:nat) (y:nat) = match x with
+  | Z -> y
+  | S x' -> S (add x' y)
+
+val req_form : x:nat -> y:nat ->
+  Lemma(requires x = S (S y))(ensures add x Z = S (S (add y Z)))
+let req_form x y = ()
+
+val bad_use : y:nat -> Lemma(ensures add (S y) Z = S (S (add y Z)))
+let bad_use y = req_form (S y) y

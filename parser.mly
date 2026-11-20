@@ -99,6 +99,27 @@ let rec build_quant qk binders body sc =
     let (v, tyo, sc') = b sc in
     Tm_quant { qk; qv = v; qty = tyo; qbody = build_quant qk rest body sc' }
 
+(* A `Lemma(requires p)` precondition becomes the refinement of the parameter it follows,
+   as in F* and DRaven, so the lemma keeps its arity: `x:t{p}` rather than an extra
+   `_:squash p` binder that every definition and call would have to supply. [p] mentions
+   the domain binder; the refinement variable of the domain may be a different var (an
+   unrefined base type carries its own), so substitute. *)
+let with_pre (dd : domd) (pre : term option) : typ =
+  match pre with
+  | None -> dd.d_typ
+  | Some p ->
+    (match dd.d_typ with
+     | T_refine r ->
+       let p' = Subst.subst_term [ (dd.d_binder, Tm_var r.rv) ] p in
+       let phi = match r.rphi with Tm_const (C_bool true) -> p' | _ -> mk_and r.rphi p' in
+       T_refine { r with rphi = phi }
+     | T_arrow _ -> failwith "requires: the parameter before Lemma is higher-order")
+
+(* A precondition with no parameter to attach to (`val L : Lemma(requires p)(ensures q)`)
+   keeps the unit binder. *)
+let close_pre ((t, pre) : typ * term option) : typ =
+  match pre with None -> t | Some p -> mk_arrow (fresh_var "_") (mk_squash p) t
+
 (* The equation generator (axioms.ml) reads a match only on a *variable*. Bind any other
    scrutinee or guard to a fresh variable first, as the hand-written sources do with
    `let p = g in if p`; inference gives the let its scheme like a user-written one. *)
@@ -481,7 +502,7 @@ rawDecls:
           let params = List.map (get_tyvar sc) ps in
           let ctors =
             List.map (fun (nm, t) ->
-              let tt = t sc in
+              let tt = close_pre (t sc) in
               { dc_name = lid_of_str nm; dc_typ = { ts_vars = params; ts_typ = tt } })
               cs
           in
@@ -519,10 +540,10 @@ intListOpt:
 /* rawDecl : scope -> (sigelt' * extra qualifiers) */
 rawDecl:
   | VAL name=IDENT COLON t=compTyp
-      { fun sc -> let tt = t sc in
+      { fun sc -> let tt = close_pre (t sc) in
                   (Sig_val (lid_of_str name, { ts_vars = scope_tyvars sc; ts_typ = tt }), []) }
   | ASSUME VAL name=IDENT COLON t=compTyp
-      { fun sc -> let tt = t sc in
+      { fun sc -> let tt = close_pre (t sc) in
                   (Sig_val (lid_of_str name, { ts_vars = scope_tyvars sc; ts_typ = tt }),
                    [Q_assumption]) }
   | ASSUME name=anyname COLON phi=term
@@ -554,19 +575,22 @@ pragma:
 /* ===== Types ===== */
 
 /* Result/computation-type position: a plain type, or the Lemma sugar. */
+/* compTyp : scope -> typ * term option — the type, and a `requires` precondition that the
+   enclosing arrow attaches to its domain (with_pre) or, at top level, closes (close_pre). */
 compTyp:
-  | t=typ { t }
+  | t=typ { fun sc -> (t sc, None) }
   | LEMMA LPAREN REQUIRES p=term RPAREN LPAREN ENSURES q=term RPAREN
-      { fun sc -> mk_arrow (fresh_var "_") (mk_squash (p sc)) (mk_squash (q sc)) }
+      { fun sc -> (mk_squash (q sc), Some (p sc)) }
   | LEMMA LPAREN ENSURES q=term RPAREN
-      { fun sc -> mk_squash (q sc) }
+      { fun sc -> (mk_squash (q sc), None) }
   | LEMMA LPAREN REQUIRES p=term RPAREN
-      { fun sc -> mk_arrow (fresh_var "_") (mk_squash (p sc)) (mk_squash mk_true) }
+      { fun sc -> (mk_squash mk_true, Some (p sc)) }
 
 typ:
   | d=domain ARROW cod=compTyp
       { fun sc -> let dd = d sc in
-                  T_arrow { abinder = dd.d_binder; adom = dd.d_typ; acod = cod dd.d_scope } }
+                  let (acod, pre) = cod dd.d_scope in
+                  T_arrow { abinder = dd.d_binder; adom = with_pre dd pre; acod } }
   | d=domain
       { fun sc -> (d sc).d_typ }
 

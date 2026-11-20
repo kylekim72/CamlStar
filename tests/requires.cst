@@ -1,0 +1,23 @@
+module Requires
+
+(* Regression test: `Lemma(requires p)(ensures q)` refines the parameter it follows,
+   `y:nat{x = S (S y)}`, instead of adding a `_:squash p` binder (parser.mly, with_pre,
+   2026-10-29). So the definition has the same arity as the val, the premise is a
+   hypothesis of the body's VCs, and a call passes no `()`; the caller's obligation is
+   the subtyping VC on that argument, discharged here by the match on x. *)
+
+type nat =
+  | Z : nat
+  | S : nat -> nat
+
+let rec add (x:nat) (y:nat) = match x with
+  | Z -> y
+  | S x' -> S (add x' y)
+
+val req_form : x:nat -> y:nat ->
+  Lemma(requires x = S (S y))(ensures add x Z = S (S (add y Z)))
+let req_form x y = ()
+
+(* a call at an instance where the premise holds: no `()` argument *)
+val use_req : y:nat -> Lemma(ensures add (S (S y)) Z = S (S (add y Z)))
+let use_req y = req_form (S (S y)) y
